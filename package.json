@@ -36,7 +36,8 @@
     "test": "node --test --test-concurrency=1 'test/*.test.ts'",
     "check": "npm run typecheck && npm test",
     "start": "node src/cli.ts serve",
-    "prepublishOnly": "npm run check && npm run build"
+    "prepublishOnly": "npm run check && npm run build",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.4.0",

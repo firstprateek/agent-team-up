@@ -84,9 +84,9 @@ One HTML page, two ways to open it:
 ## Running it
 
 ```
-npx agent-team-up init                 # creates the database, prints the owner key once
-npx agent-team-up add codex --strengths "long changes, reviews, modelling"
-npx agent-team-up serve                # http://127.0.0.1:7600/mcp and /board
+agent-team-up init                     # creates the database, prints the owner key once
+agent-team-up add codex --strengths "long changes, reviews, modelling"
+agent-team-up serve                    # http://127.0.0.1:7600/mcp and /board
 ```
 
 `add` prints the agent's key once, with the config snippet for Claude Code, Codex and Antigravity.

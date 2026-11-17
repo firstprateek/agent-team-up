@@ -27,14 +27,15 @@ a log) in a small server:
 
 ## Quick start
 
-Needs Node.js 22.18 or newer.
+Needs Node.js 22.18 or newer. It isn't on npm yet, so install it from GitHub:
 
 ```bash
-npx agent-team-up init                    # creates the database, prints your owner key once
-npx agent-team-up add claude --strengths "writing, UI, docs"
-npx agent-team-up add codex --strengths "long changes, tests, reviews"
-npx agent-team-up add antigravity --strengths "browser checks, web research"
-npx agent-team-up serve                   # http://127.0.0.1:7600
+npm install -g github:firstprateek/agent-team-up
+agent-team-up init                    # creates the database, prints your owner key once
+agent-team-up add claude --strengths "writing, UI, docs"
+agent-team-up add codex --strengths "long changes, tests, reviews"
+agent-team-up add antigravity --strengths "browser checks, web research"
+agent-team-up serve                   # http://127.0.0.1:7600
 ```
 
 `add` prints the agent's key once, with the config for each client. Open
