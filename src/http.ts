@@ -280,7 +280,7 @@ export function createHub({ store, allowedHosts = [] }: HubOptions): Server {
           'cache-control': 'no-store',
           'content-security-policy': csp,
           'x-content-type-options': 'nosniff',
-          'referrer-policy': 'no-referrer',
+          'referrer-policy': 'same-origin', // no-referrer would make browsers send Origin: null
         });
         res.end(html);
         return;
