@@ -76,6 +76,8 @@ export class TeamError extends Error {}
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const RESERVED = new Set(['all', 'owner', 'log', 'you', 'me', 'team']);
 const SESSION_DAYS = 30;
+/** Names of agents resting right now; takes the current time as its one parameter. */
+const RESTING = "SELECT name FROM agents WHERE status = 'resting' AND (resting_until IS NULL OR resting_until > ?)";
 
 export function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex');
@@ -171,7 +173,27 @@ export class Store {
     this.events.setMaxListeners(0);
   }
 
+  private watcher?: NodeJS.Timeout;
+
+  /** Notices writes by other processes (the CLI, say) and announces them like local ones. */
+  watch(intervalMs = 1000): void {
+    let last = this.dataVersion();
+    this.watcher = setInterval(() => {
+      const v = this.dataVersion();
+      if (v !== last) {
+        last = v;
+        this.changed();
+      }
+    }, intervalMs);
+    this.watcher.unref();
+  }
+
+  private dataVersion(): number {
+    return Number((this.db.prepare('PRAGMA data_version').get() as { data_version: number }).data_version);
+  }
+
   close(): void {
+    if (this.watcher) clearInterval(this.watcher);
     this.db.close();
   }
 
@@ -427,6 +449,8 @@ export class Store {
         t = this.requireTask(id);
         if (t.claimed_by === agent && t.state !== 'done' && t.state !== 'dropped') return t;
         if (t.state !== 'open') throw new TeamError(`#${id} is ${t.state}${t.claimed_by ? ` (${t.claimed_by})` : ''}, so it can't be claimed.`);
+        const g = t.goal_id !== null ? this.goal(t.goal_id) : undefined;
+        if (g && g.state !== 'open') throw new TeamError(`#${id} belongs to goal G${g.id}, which is ${g.state}.`);
         if (t.for_agent && t.for_agent !== agent) {
           const owner = this.getAgent(t.for_agent);
           if (owner && owner.status !== 'resting') {
@@ -434,9 +458,15 @@ export class Store {
           }
         }
       } else {
+        // Mine first, then anyone's, then those aimed at a resting teammate; never under a closed goal.
         t = this.db
-          .prepare("SELECT * FROM tasks WHERE state = 'open' AND claimed_by IS NULL AND (for_agent IS NULL OR for_agent = ?) ORDER BY (for_agent IS NULL), id LIMIT 1")
-          .get(agent) as Task | undefined;
+          .prepare(
+            `SELECT t.* FROM tasks t LEFT JOIN goals g ON g.id = t.goal_id
+             WHERE t.state = 'open' AND t.claimed_by IS NULL AND (t.goal_id IS NULL OR g.state = 'open')
+               AND (t.for_agent IS NULL OR t.for_agent = ? OR t.for_agent IN (${RESTING}))
+             ORDER BY CASE WHEN t.for_agent = ? THEN 0 WHEN t.for_agent IS NULL THEN 1 ELSE 2 END, t.id LIMIT 1`,
+          )
+          .get(agent, this.now(), agent) as Task | undefined;
         if (!t) return undefined;
       }
       this.db
@@ -469,6 +499,16 @@ export class Store {
       const note = p.note?.trim();
       const links = p.links?.trim();
       const now = this.now();
+      const state = p.state ?? t.state;
+      if (!TASK_STATES.includes(state)) throw new TeamError(`Unknown state ${state}.`);
+      // Without holding it, the poster may only drop or re-aim a task, and the owner may also close
+      // or reopen it. Someone has to hold a task that is being worked on.
+      const allowed = holder ? TASK_STATES : asOwner ? ['open', 'done', 'dropped'] : ['dropped'];
+      if (!p.handoff && state !== t.state && !(allowed as readonly string[]).includes(state)) {
+        throw new TeamError(
+          asOwner ? `#${id} has nobody on it. Hand it to a teammate instead.` : `Claim #${id} before moving it to ${state}.`,
+        );
+      }
       if (p.handoff) {
         const to = p.handoff.trim();
         this.requireAgent(to);
@@ -486,9 +526,7 @@ export class Store {
         });
         return this.task(id)!;
       }
-      const state = p.state ?? t.state;
-      if (!TASK_STATES.includes(state)) throw new TeamError(`Unknown state ${state}.`);
-      const claimedBy = state === 'open' ? null : t.claimed_by ?? (asOwner ? null : by);
+      const claimedBy = state === 'open' ? null : t.claimed_by;
       this.db
         .prepare('UPDATE tasks SET state = ?, claimed_by = ?, note = COALESCE(?, note), links = COALESCE(?, links), updated_at = ? WHERE id = ?')
         .run(state, claimedBy, note ?? null, links ?? null, now, id);
@@ -563,6 +601,9 @@ export class Store {
     if (!g) throw new TeamError(`There is no goal G${id}.`);
     this.tx(() => {
       this.db.prepare('UPDATE goals SET state = ?, updated_at = ? WHERE id = ?').run(state, this.now(), id);
+      if (state === 'dropped') {
+        this.db.prepare("UPDATE tasks SET state = 'dropped', updated_at = ? WHERE goal_id = ? AND state = 'open' AND claimed_by IS NULL").run(this.now(), id);
+      }
       this.log({ sender: 'owner', audience: 'all', kind: 'goal', task_id: null, goal_id: id, text: `marked goal G${id} "${g.title}" ${state}.` });
     });
     this.changed();

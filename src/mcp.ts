@@ -30,13 +30,17 @@ function fail(s: string) {
   return { content: [{ type: 'text' as const, text: s }], isError: true };
 }
 
+type Ctx = { mcpReq: { signal: AbortSignal }; http?: { req?: Request } };
+
 /** Runs a tool body and turns a TeamError into a readable tool error. */
 function guard<A>(fn: (args: A, signal: AbortSignal) => Promise<ReturnType<typeof text>> | ReturnType<typeof text>) {
   // Tools without an input schema are called with the context alone.
-  return async (args: A, ctx?: { mcpReq: { signal: AbortSignal } }) => {
-    const c = ctx ?? (args as unknown as { mcpReq: { signal: AbortSignal } });
+  return async (args: A, ctx?: Ctx) => {
+    const c = ctx ?? (args as unknown as Ctx);
+    // Abort on a cancel notification or when the HTTP client goes away, whichever comes first.
+    const signals = [c.mcpReq.signal, c.http?.req?.signal].filter((x): x is AbortSignal => x instanceof AbortSignal);
     try {
-      return await fn(args, c.mcpReq.signal);
+      return await fn(args, AbortSignal.any(signals));
     } catch (err) {
       if (err instanceof TeamError) return fail(err.message);
       throw err;
@@ -157,9 +161,11 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       while (store.unread(me) === 0 && !signal.aborted) {
         const left = deadline - Date.now();
         if (left <= 0) break;
-        // Another process may write to the database too, so look again at least every 2 s.
+        // Look again every 2 s as well, in case a change was missed.
         await nextChange(store, Math.min(left, 2000), signal);
       }
+      // Nobody is listening any more: leave the messages for the next wait.
+      if (signal.aborted) return text('Cancelled.');
       const { events, more } = store.takeInbox(me);
       if (!events.length) return text('Nothing new. Call wait again, or end your turn if you are done.');
       const now = store.now();
@@ -201,7 +207,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       _meta: { ui: { resourceUri: BOARD_URI } },
     },
     async () => {
-      const s = boardState(store);
+      const s = boardState(store, me);
       return { content: [{ type: 'text' as const, text: boardText(s) }], structuredContent: s as unknown as Record<string, unknown> };
     },
   );

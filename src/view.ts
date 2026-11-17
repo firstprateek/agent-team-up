@@ -32,14 +32,14 @@ function taskLine(t: Task, me: string): string {
       : t.for_agent !== null
         ? `for ${t.for_agent === me ? 'you' : t.for_agent}`
         : '';
-  return `#${t.id} [${t.state}${who ? `, ${who}` : ''}] ${t.title}${t.goal_id !== null ? ` (G${t.goal_id})` : ''}`;
+  return `#${t.id} [${t.state}${who ? `, ${who}` : ''}] ${oneLine(t.title)}${t.goal_id !== null ? ` (G${t.goal_id})` : ''}`;
 }
 
 function agentLine(a: Agent, tasks: Task[], me: string, now: number): string {
   const doing = tasks.filter((t) => t.claimed_by === a.name && t.state === 'working');
-  const parts = [`${a.name === me ? `${a.name} (you)` : a.name}${a.strengths ? ` — ${a.strengths}` : ''}`];
+  const parts = [`${a.name === me ? `${a.name} (you)` : a.name}${a.strengths ? ` — ${oneLine(a.strengths)}` : ''}`];
   if (a.status === 'resting') {
-    parts.push(`resting${a.resting_until ? ` ${until(a.resting_until, now)}` : ''}${a.status_note ? ` (${a.status_note})` : ''}`);
+    parts.push(`resting${a.resting_until ? ` ${until(a.resting_until, now)}` : ''}${a.status_note ? ` (${oneLine(a.status_note)})` : ''}`);
   } else if (doing.length) {
     parts.push(`on ${doing.map((t) => `#${t.id}`).join(', ')}`);
   } else {
@@ -60,7 +60,7 @@ export function teamText(store: Store, me: string): string {
   const lines: string[] = [`You are ${me}.`, '', 'Team:'];
   for (const a of agents) lines.push(agentLine(a, tasks, me, now));
   lines.push('', goals.length ? 'Goals:' : 'Goals: none yet. The owner posts them on the board.');
-  for (const g of goals) lines.push(`- G${g.id} ${g.title}${g.detail ? ` — ${clip(g.detail, 160)}` : ''}`);
+  for (const g of goals) lines.push(`- G${g.id} ${oneLine(g.title)}${g.detail ? ` — ${clip(g.detail, 160)}` : ''}`);
   const mine = tasks.filter((t) => t.claimed_by === me);
   const forMe = tasks.filter((t) => t.state === 'open' && t.claimed_by === null && t.for_agent === me);
   const open = tasks.filter((t) => t.state === 'open' && t.claimed_by === null && t.for_agent === null);
@@ -85,11 +85,20 @@ export function teamText(store: Store, me: string): string {
 }
 
 export function taskText(t: Task, me: string): string {
-  const lines = [taskLine(t, me), '', t.brief];
-  if (t.note) lines.push('', `Latest note: ${t.note}`);
-  if (t.links) lines.push(`Links: ${t.links}`);
+  const lines = [taskLine(t, me), '', 'Brief:', indent(t.brief)];
+  if (t.note) lines.push('', 'Latest note:', indent(t.note));
+  if (t.links) lines.push(`Links: ${oneLine(t.links)}`);
   lines.push('', `Posted by ${t.posted_by === me ? 'you' : t.posted_by}.`);
   return lines.join('\n');
+}
+
+/** Keeps a teammate's text on its own line(s), so it can't pass for a line from the server. */
+function oneLine(s: string): string {
+  return s.replace(/\s*[\r\n]+\s*/g, ' ↵ ').trim();
+}
+
+function indent(s: string): string {
+  return s.trim().split(/\r?\n/).map((l) => `  | ${l}`).join('\n');
 }
 
 export function eventLine(e: TeamEvent, me: string, now: number): string {
@@ -97,9 +106,9 @@ export function eventLine(e: TeamEvent, me: string, now: number): string {
   const from = e.sender === me ? 'you' : e.sender;
   if (e.kind === 'message') {
     const to = e.audience === me ? 'you' : e.audience;
-    return `[${when}] ${from} → ${to}${e.task_id !== null ? ` (#${e.task_id})` : ''}: ${e.text}`;
+    return `[${when}] ${from} → ${to}${e.task_id !== null ? ` (#${e.task_id})` : ''}: ${oneLine(e.text)}`;
   }
-  return `[${when}] ${from} ${e.text}`;
+  return `[${when}] ${from} ${oneLine(e.text)}`;
 }
 
 export interface BoardState {
@@ -111,15 +120,19 @@ export interface BoardState {
   events: TeamEvent[];
 }
 
-export function boardState(store: Store): BoardState {
-  return {
-    now: store.now(),
-    agents: store.agents(),
-    goals: store.goals(['open', 'done']).filter((g) => g.state === 'open' || store.now() - g.updated_at < 7 * DAY),
-    tasks: store.tasks(DAY),
-    questions: store.openQuestions(),
-    events: store.recentEvents(60),
-  };
+/** The board's data. For an agent (`viewer`), direct messages and answers meant for others are left out. */
+export function boardState(store: Store, viewer?: string): BoardState {
+  const tasks = store.tasks(DAY);
+  const used = new Set(tasks.map((t) => t.goal_id));
+  const goals = store
+    .goals(['open', 'done', 'dropped'])
+    .filter((g) => g.state === 'open' || used.has(g.id) || (g.state === 'done' && store.now() - g.updated_at < 7 * DAY));
+  const shared = new Set(['all', 'log', 'owner']);
+  const events = store
+    .recentEvents(viewer ? 200 : 60)
+    .filter((e) => !viewer || shared.has(e.audience) || e.audience === viewer || e.sender === viewer)
+    .slice(-60);
+  return { now: store.now(), agents: store.agents(), goals, tasks, questions: store.openQuestions(), events };
 }
 
 /** A plain-text board for clients that don't render MCP Apps. */

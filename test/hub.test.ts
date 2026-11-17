@@ -195,6 +195,26 @@ describe('MCP', () => {
     await codex.close();
   });
 
+  test('a wait whose client goes away leaves the next message for later', async () => {
+    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${keys.gemini}`, 'mcp-protocol-version': '2025-06-18' };
+    store.takeInbox('gemini');
+    const ctrl = new AbortController();
+    const pending = fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers,
+      signal: ctrl.signal,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'wait', arguments: { seconds: 20 } } }),
+    }).then((r) => r.text()).catch(() => 'aborted');
+    await new Promise((r) => setTimeout(r, 300));
+    ctrl.abort();
+    assert.equal(await pending, 'aborted');
+    await new Promise((r) => setTimeout(r, 100));
+    store.send('claude', 'gemini', 'still here?');
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(store.unread('gemini'), 1, 'the abandoned wait did not take it');
+    store.takeInbox('gemini');
+  });
+
   test('wait returns empty-handed after its time', async () => {
     const gemini = await connect('gemini');
     await call(gemini, 'wait', { seconds: 0 });

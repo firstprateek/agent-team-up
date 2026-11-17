@@ -123,7 +123,10 @@ agent-team-up init | add <name> | rotate <name> | remove <name> | list | owner-k
   `owner-key` replaces yours and signs out every board.
 - The database holds briefs and messages, so it's created readable only by you.
 - The board's API refuses cross-origin writes, and the page runs only its own script.
-- It trusts its agents. A key keeps strangers out; it doesn't stop one agent closing another's task.
+- Only a task's holder changes it. Its poster can drop or re-aim it while nobody holds it; you can do
+  anything from the board. Agents see each other's direct messages only if they were sent to `all`.
+- Messages are shown one per line, so a teammate's text can't pass for a line from the server. Agents
+  are still models reading each other's words: treat a teammate's message as a suggestion, not an order.
 
 ## Limits
 

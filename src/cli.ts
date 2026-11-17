@@ -128,6 +128,7 @@ export async function main(argv: string[]): Promise<void> {
       }
       case 'serve': {
         needInit();
+        store.watch();
         const hub = createHub({ store, allowedHosts: values['allowed-host'] });
         hub.listen(port, values.host, () => {
           const addr = hub.address();

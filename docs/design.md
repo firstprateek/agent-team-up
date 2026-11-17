@@ -99,4 +99,5 @@ use (DNS-rebinding guard).
   agent-team-up coordinates them; it doesn't drive them.
 - `wait` returns every ~45 s because client tool timeouts differ, so an idle agent spends a few tokens
   a minute.
-- It trusts its agents. Keys keep strangers out; they don't stop an agent from closing another's task.
+- Only a task's holder changes it (its poster can drop or re-aim it while nobody holds it; the owner can
+  do anything). Agents are models reading each other's words, so a message is a suggestion, not an order.

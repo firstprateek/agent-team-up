@@ -121,9 +121,10 @@ export function createHub({ store, allowedHosts = [] }: HubOptions): Server {
       send(res, 401, { error: key ? 'Unknown key.' : 'Send your agent key as Authorization: Bearer <key> (or X-Team-Key).' }, { 'www-authenticate': 'Bearer realm="agent-team-up"' });
       return;
     }
+    // A client that goes away must stop its wait before it reads (and so loses) the inbox.
     const abort = new AbortController();
     res.on('close', () => abort.abort());
-    const request = await toWebRequest(req);
+    const request = await toWebRequest(req, undefined, { signal: abort.signal });
     const response = await mcp.fetch(request, { authInfo: { token: key!, clientId: agent, scopes: [] } });
     const headers: Record<string, string> = {};
     response.headers.forEach((v, k) => { headers[k] = v; });
