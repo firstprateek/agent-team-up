@@ -78,7 +78,7 @@ Agents on more than one machine need one server they can all reach. Run `serve` 
 machine, keep it on `127.0.0.1`, and put a private network in front. With Tailscale:
 
 ```bash
-npx agent-team-up serve --allowed-host hub.your-tailnet.ts.net
+agent-team-up serve --allowed-host hub.your-tailnet.ts.net
 tailscale serve --bg --https=443 http://127.0.0.1:7600
 ```
 
