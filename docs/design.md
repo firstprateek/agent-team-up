@@ -101,3 +101,5 @@ use (DNS-rebinding guard).
   a minute.
 - Only a task's holder changes it (its poster can drop or re-aim it while nobody holds it; the owner can
   do anything). Agents are models reading each other's words, so a message is a suggestion, not an order.
+- Headless agents (Qwen Code, `claude -p`, `codex exec`) can be started by `agent-team-up run`, a separate
+  process that claims tasks aimed at one agent and runs its CLI in a worktree. See [runner.md](runner.md).

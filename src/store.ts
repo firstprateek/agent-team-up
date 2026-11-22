@@ -442,7 +442,7 @@ export class Store {
   }
 
   /** Claims task `id`, or the best open task for `agent`. Returns undefined when there is nothing to take. */
-  claim(agent: string, id?: number): Task | undefined {
+  claim(agent: string, id?: number, opts: { mineOnly?: boolean } = {}): Task | undefined {
     const out = this.tx(() => {
       let t: Task | undefined;
       if (id !== undefined) {
@@ -459,14 +459,16 @@ export class Store {
         }
       } else {
         // Mine first, then anyone's, then those aimed at a resting teammate; never under a closed goal.
+        // With mineOnly, only those aimed at me.
+        const who = opts.mineOnly ? 't.for_agent = ?' : `(t.for_agent IS NULL OR t.for_agent = ? OR t.for_agent IN (${RESTING}))`;
         t = this.db
           .prepare(
             `SELECT t.* FROM tasks t LEFT JOIN goals g ON g.id = t.goal_id
              WHERE t.state = 'open' AND t.claimed_by IS NULL AND (t.goal_id IS NULL OR g.state = 'open')
-               AND (t.for_agent IS NULL OR t.for_agent = ? OR t.for_agent IN (${RESTING}))
+               AND ${who}
              ORDER BY CASE WHEN t.for_agent = ? THEN 0 WHEN t.for_agent IS NULL THEN 1 ELSE 2 END, t.id LIMIT 1`,
           )
-          .get(agent, this.now(), agent) as Task | undefined;
+          .get(...(opts.mineOnly ? [agent, agent] : [agent, this.now(), agent])) as Task | undefined;
         if (!t) return undefined;
       }
       this.db

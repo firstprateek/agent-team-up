@@ -121,7 +121,7 @@ describe('MCP', () => {
   test('tools, and the board as an MCP App', async () => {
     const c = await connect('claude');
     const { tools } = await c.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ['board', 'claim', 'post_task', 'send', 'set_status', 'team', 'update', 'wait']);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ['board', 'claim', 'post_task', 'send', 'set_status', 'task', 'team', 'update', 'wait']);
     const board = tools.find((t) => t.name === 'board')!;
     assert.equal((board._meta as { ui: { resourceUri: string } }).ui.resourceUri, BOARD_URI);
     const res = await c.readResource({ uri: BOARD_URI });
@@ -193,6 +193,29 @@ describe('MCP', () => {
 
     await claude.close();
     await codex.close();
+  });
+
+  test('claim returns structuredContent, mine_only skips unaimed tasks, and task reads any task', async () => {
+    const claude = await connect('claude');
+    const gemini = await connect('gemini');
+    const open = store.postTask('claude', { title: 'anyone', brief: 'open one' });
+    const aimed = store.postTask('claude', { title: 'aimed', brief: 'for gemini', for: 'gemini' });
+    const r = await gemini.callTool({ name: 'claim', arguments: { mine_only: true } });
+    const sc = r.structuredContent as { task: Record<string, unknown> };
+    assert.equal(sc.task.id, aimed.id);
+    assert.equal(sc.task.state, 'working');
+    assert.equal(sc.task.for_agent, 'gemini');
+    assert.equal(sc.task.posted_by, 'claude');
+    assert.equal(sc.task.brief, 'for gemini');
+    assert.equal(await call(gemini, 'claim', { mine_only: true }), 'Nothing open for you. Post a task, or call wait.');
+    assert.equal(store.task(open.id)!.state, 'open');
+
+    const t = await claude.callTool({ name: 'task', arguments: { task: aimed.id } });
+    assert.match((t.content as { text: string }[])[0].text, /for gemini/);
+    assert.equal((t.structuredContent as { task: { claimed_by: string } }).task.claimed_by, 'gemini');
+    await assert.rejects(call(claude, 'task', { task: 99999 }), /No task/);
+    await claude.close();
+    await gemini.close();
   });
 
   test('a wait whose client goes away leaves the next message for later', async () => {

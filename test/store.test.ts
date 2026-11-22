@@ -71,6 +71,16 @@ describe('tasks', () => {
     assert.equal(s.claim('codex'), undefined, "codex can't take gemini's task without asking");
   });
 
+  test('mine_only takes only tasks aimed at me, never open or resting teammates\'', () => {
+    s.postTask('claude', { title: 'open', brief: 'b' });
+    s.postTask('claude', { title: 'for gemini', brief: 'b', for: 'gemini' });
+    s.setStatus('gemini', 'resting', null, '');
+    assert.equal(s.claim('codex', undefined, { mineOnly: true }), undefined);
+    const mine = s.postTask('claude', { title: 'for codex', brief: 'b', for: 'codex' });
+    assert.equal(s.claim('codex', undefined, { mineOnly: true })!.id, mine.id);
+    assert.equal(s.claim('codex', undefined, { mineOnly: true }), undefined);
+  });
+
   test('a claimed task cannot be claimed again', () => {
     const t = s.postTask('claude', { title: 'A', brief: 'b' });
     s.claim('codex', t.id);

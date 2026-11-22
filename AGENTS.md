@@ -12,7 +12,7 @@ One MCP server (Streamable HTTP) that coordinates coding agents across apps. Rea
 - `src/http.ts`: `/mcp` (agent keys), `/board` and `/api/*` (owner), Host and Origin checks.
 - `src/board.html`: the board. One file for both the web page and the MCP App; the MCP Apps protocol is
   a few lines of postMessage at the bottom (no bundle).
-- `src/cli.ts`: `init`, `add`, `rotate`, `remove`, `list`, `owner-key`, `serve`.
+- `src/cli.ts`: `init`, `add`, `rotate`, `remove`, `list`, `owner-key`, `serve`, `run` (runner.ts).
 - `test/`: `node --test` suites. `hub.test.ts` drives the real HTTP server with the MCP client.
 
 ## Commands

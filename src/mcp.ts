@@ -3,7 +3,7 @@
 import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
-import { type Store, TASK_STATES, TeamError } from './store.ts';
+import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
 
 export const VERSION = '0.1.0';
@@ -14,7 +14,7 @@ const WAIT_MAX = 55;
 const INSTRUCTIONS = `agent-team-up connects you to a team of coding agents from other apps and subscriptions, plus the owner (the human).
 How to work:
 1. Call team first. It shows your teammates and their strengths, the owner's goals and the tasks.
-2. claim a task (no id takes the best one for you), do it, and keep it current with update: a short note and links (branch, PR, files). Set state done when finished.
+2. claim a task (no id takes the best one for you; task reads any task), do it, and keep it current with update: a short note and links (branch, PR, files). Set state done when finished.
 3. Split big work with post_task. Write a brief someone in another app could start from cold: what, where, done-when. Point at files and PRs; don't paste them. Use for to aim a task at the teammate whose strengths fit.
 4. To get a review or pass work on, update with handoff set to that teammate.
 5. When you need the owner, send to "owner". It shows on their board; carry on with other work meanwhile. The answer comes back through wait.
@@ -26,6 +26,11 @@ function text(s: string) {
   return { content: [{ type: 'text' as const, text: s }] };
 }
 
+/** The task fields machine clients (the runner) read, so they never parse prose. */
+function taskData(t: Task) {
+  return { task: { id: t.id, title: t.title, brief: t.brief, posted_by: t.posted_by, goal_id: t.goal_id, for_agent: t.for_agent, claimed_by: t.claimed_by, state: t.state, note: t.note, links: t.links } };
+}
+
 function fail(s: string) {
   return { content: [{ type: 'text' as const, text: s }], isError: true };
 }
@@ -33,7 +38,7 @@ function fail(s: string) {
 type Ctx = { mcpReq: { signal: AbortSignal }; http?: { req?: Request } };
 
 /** Runs a tool body and turns a TeamError into a readable tool error. */
-function guard<A>(fn: (args: A, signal: AbortSignal) => Promise<ReturnType<typeof text>> | ReturnType<typeof text>) {
+function guard<A, R extends object = ReturnType<typeof text>>(fn: (args: A, signal: AbortSignal) => Promise<R | ReturnType<typeof fail>> | R | ReturnType<typeof fail>) {
   // Tools without an input schema are called with the context alone.
   return async (args: A, ctx?: Ctx) => {
     const c = ctx ?? (args as unknown as Ctx);
@@ -99,12 +104,30 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     {
       title: 'Claim a task',
       description: 'Take a task and get its brief. With no id, takes the best open one for you: those aimed at you first, then the oldest open to anyone.',
-      inputSchema: { task: z.number().int().optional().describe('Task number (#7 is 7).') },
+      inputSchema: {
+        task: z.number().int().optional().describe('Task number (#7 is 7).'),
+        mine_only: z.boolean().optional().describe('With no task number, take only tasks aimed at you.'),
+      },
     },
-    guard((a: { task?: number }) => {
-      const t = store.claim(me, a.task);
+    guard((a: { task?: number; mine_only?: boolean }) => {
+      const t = store.claim(me, a.task, { mineOnly: a.mine_only });
       if (!t) return text('Nothing open for you. Post a task, or call wait.');
-      return text(`You have #${t.id}. Keep it current with update.\n\n${taskText(t, me)}`);
+      return { ...text(`You have #${t.id}. Keep it current with update.\n\n${taskText(t, me)}`), structuredContent: taskData(t) };
+    }),
+  );
+
+  server.registerTool(
+    'task',
+    {
+      title: 'Read a task',
+      description: 'A task\'s state, holder, brief, note and links. Read-only; any task.',
+      inputSchema: { task: z.number().int().describe('Task number (#7 is 7).') },
+      annotations: { readOnlyHint: true },
+    },
+    guard((a: { task: number }) => {
+      const t = store.task(a.task);
+      if (!t) return fail(`No task #${a.task}.`);
+      return { ...text(taskText(t, me)), structuredContent: taskData(t) };
     }),
   );
 

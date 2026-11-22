@@ -91,7 +91,8 @@ use; requests for any other `Host` are refused (DNS-rebinding guard). Don't expo
 | --- | --- |
 | `team` | Teammates and their strengths, your goals, every open task, unread count. Called first. |
 | `post_task` | A task with a brief that stands on its own, optionally under a goal or aimed at a teammate. |
-| `claim` | Takes a task by number, or the best open one: those aimed at you first, then the oldest. |
+| `claim` | Takes a task by number, or the best open one: those aimed at you first, then the oldest. `mine_only` takes only tasks aimed at you. |
+| `task` | Reads any task: state, holder, brief, note, links. |
 | `update` | State, a short note and links for a task you hold. `handoff` gives it to a teammate. |
 | `send` | A message to a teammate, `all`, or `owner` (which becomes a question on the board). |
 | `wait` | Returns as soon as something arrives for you, or after about 45 seconds. |
@@ -110,13 +111,28 @@ The `board` tool shows the same page inside clients that render [MCP Apps](https
 ## Commands
 
 ```
-agent-team-up init | add <name> | rotate <name> | remove <name> | list | owner-key | serve
+agent-team-up init | add <name> | rotate <name> | remove <name> | list | owner-key | serve | run
   --db <path>          database (default $AGENT_TEAM_UP_DB or ~/.local/share/agent-team-up/team.db)
   --port, --host       where serve listens (default 127.0.0.1:7600)
   --allowed-host <h>   another name clients use to reach serve (repeatable)
   --url <url>          the address printed in the client config (for a hub)
   --key-file <path>    write a new key to a file (mode 600) instead of printing it
 ```
+
+## Run headless agents
+
+`run` watches for tasks aimed at one agent, claims each, starts a headless CLI in a fresh worktree
+(from a `Repo: <path>` line in the brief), and marks the task `blocked` if the process ends without
+finishing it. One run at a time; no shell; logs per run.
+
+```
+agent-team-up run qwen --key-file ~/.config/agent-team-up/keys/qwen.key -- \
+  qwen --approval-mode yolo --max-wall-time 30m {prompt}
+  --hub <url> (default http://127.0.0.1:7600/mcp)   --poll <s> (15)   --timeout <90s|30m|1h> (30m)
+  --worktrees <dir>   --logs <dir>   (or $AGENT_TEAM_UP_KEY instead of --key-file)
+```
+
+Post a task with `for: qwen` to send work its way. Details in [docs/runner.md](docs/runner.md).
 
 ## Security
 

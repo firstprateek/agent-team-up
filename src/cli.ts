@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// agent-team-up: init | add | rotate | remove | list | owner-key | serve
+// agent-team-up: init | add | rotate | remove | list | owner-key | serve | run
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createHub } from './http.ts';
 import { VERSION } from './mcp.ts';
+import { defaultLogs, defaultWorktrees, parseDuration, runLoop } from './runner.ts';
 import { Store, TeamError } from './store.ts';
 import { ago } from './view.ts';
 
@@ -20,6 +21,9 @@ Usage:
   agent-team-up list                          List agents.
   agent-team-up owner-key                     Make a new owner key (signs out every board).
   agent-team-up serve [--port 7600] [--host 127.0.0.1] [--allowed-host name]...
+  agent-team-up run <agent> [--hub url] [--key-file path] [--poll s] [--timeout 30m]
+                    [--worktrees dir] [--logs dir] -- <command> [args...]
+                                            Run a headless agent on tasks aimed at <agent>; {prompt} is replaced.
 
 Options:
   --db <path>        Database file (default $AGENT_TEAM_UP_DB or ~/.local/share/agent-team-up/team.db).
@@ -57,6 +61,34 @@ function output(key: string, keyFile: string | undefined, label: string, extra: 
   process.stdout.write(`${label} (shown once; keep it private):\n  ${key}\n${extra ? `\n${extra}\n` : ''}`);
 }
 
+async function runCommand(
+  [agent, ...command]: string[],
+  v: { hub?: string; poll: string; timeout: string; worktrees?: string; logs?: string; 'key-file'?: string },
+): Promise<void> {
+  if (!agent || !command.length) fail('Usage: agent-team-up run <agent> [options] -- <command> [args...]');
+  const keyFile = v['key-file'];
+  const key = (keyFile ? readFileSync(keyFile, 'utf8') : (process.env.AGENT_TEAM_UP_KEY ?? '')).trim();
+  if (!key) fail('No key: pass --key-file or set AGENT_TEAM_UP_KEY.');
+  const poll = Number(v.poll);
+  if (!(poll > 0)) fail(`--poll ${v.poll} isn't a number of seconds.`);
+  let timeoutMs: number;
+  try {
+    timeoutMs = parseDuration(v.timeout);
+  } catch (err) {
+    return fail((err as Error).message);
+  }
+  const hub = v.hub ?? 'http://127.0.0.1:7600/mcp';
+  const log = (line: string) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+  const ac = new AbortController();
+  const stop = () => ac.abort();
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  log(`runner started: agent ${agent}, hub ${hub}`);
+  await runLoop({ agent, hub, key, command, pollMs: poll * 1000, timeoutMs, worktrees: v.worktrees ?? defaultWorktrees(), logs: v.logs ?? defaultLogs(), signal: ac.signal, log });
+  log('runner stopped');
+  process.exit(0);
+}
+
 export async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -69,6 +101,11 @@ export async function main(argv: string[]): Promise<void> {
       strengths: { type: 'string', default: '' },
       url: { type: 'string' },
       'key-file': { type: 'string' },
+      hub: { type: 'string' },
+      poll: { type: 'string', default: '15' },
+      timeout: { type: 'string', default: '30m' },
+      worktrees: { type: 'string' },
+      logs: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -76,6 +113,8 @@ export async function main(argv: string[]): Promise<void> {
   if (values.version) return void process.stdout.write(`${VERSION}\n`);
   const [cmd, name] = positionals;
   if (values.help || !cmd) return void process.stdout.write(HELP);
+
+  if (cmd === 'run') return runCommand(positionals.slice(1), values);
 
   const dbPath = values.db ?? process.env.AGENT_TEAM_UP_DB ?? join(homedir(), '.local', 'share', 'agent-team-up', 'team.db');
   const port = Number(values.port);
