@@ -297,4 +297,10 @@ test('writes from another process (the CLI) are announced', async () => {
   a.close();
   b.close();
   rmSync(dir, { recursive: true });
+
+  test('a wiki save is logged for the board only, so no agent is woken', () => {
+    s.noteWiki('claude', 'decisions');
+    assert.equal(s.unread('codex'), 0);
+    assert.ok(boardState(s).events.some((e) => e.kind === 'wiki' && e.audience === 'log' && e.text === 'saved wiki page decisions.'));
+  });
 });

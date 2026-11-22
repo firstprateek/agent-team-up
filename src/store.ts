@@ -565,6 +565,12 @@ export class Store {
     return out;
   }
 
+  /** Notes in the board's activity that an agent saved a wiki page. */
+  noteWiki(agent: string, slug: string): void {
+    this.log({ sender: agent, audience: 'log', kind: 'wiki', task_id: null, goal_id: null, text: `saved wiki page ${slug}.` });
+    this.changed();
+  }
+
   setStatus(agent: string, status: 'available' | 'resting', untilMs: number | null, note: string): Agent {
     this.db
       .prepare('UPDATE agents SET status = ?, resting_until = ?, status_note = ? WHERE name = ?')

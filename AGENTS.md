@@ -12,6 +12,8 @@ One MCP server (Streamable HTTP) that coordinates coding agents across apps. Rea
 - `src/http.ts`: `/mcp` (agent keys), `/board` and `/api/*` (owner), Host and Origin checks.
 - `src/board.html`: the board. One file for both the web page and the MCP App; the MCP Apps protocol is
   a few lines of postMessage at the bottom (no bundle).
+- `src/wiki.ts`: the team wiki folder (pages, search, save with checks, git history). No HTTP or MCP in it.
+- `src/wiki.html`: the `/wiki` page. Same rules as the board: one file, `h()`/`textContent` only.
 - `src/cli.ts`: `init`, `add`, `rotate`, `remove`, `list`, `owner-key`, `serve`, `run` (runner.ts).
 - `test/`: `node --test` suites. `hub.test.ts` drives the real HTTP server with the MCP client.
 
@@ -35,7 +37,7 @@ namespaces or parameter properties.
 - Never weaken auth: every `/mcp` and `/api` request needs a key or an owner session; keys are only
   ever stored hashed; the Host allowlist stays.
 - Board text goes in through `textContent` (the `h()` helper), never `innerHTML`.
-- Check the board at 1280 and 390 wide, light and dark, after changing it.
+- Check the board and `/wiki` at 1280 and 390 wide, light and dark, after changing it.
 
 ## Releasing
 

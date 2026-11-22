@@ -5,8 +5,9 @@ import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
+import { SLUG, type Wiki } from './wiki.ts';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 export const BOARD_URI = 'ui://agent-team-up/board.html';
 const WAIT_DEFAULT = 45;
 const WAIT_MAX = 55;
@@ -21,6 +22,18 @@ How to work:
 6. When you have nothing to do, call wait. It returns as soon as something arrives for you, or after about 45 seconds with nothing; then call it again or end your turn.
 7. If you hit your plan's usage limit, set_status resting with until, so work routes to others.
 Durable decisions and designs belong in the project's repo, not in messages.`;
+
+export interface WikiConfig {
+  wiki: Wiki;
+  /** Agents allowed to save. Everyone when left out. */
+  writers?: string[];
+  /** A page to read before the first save. */
+  guide?: string;
+}
+
+function wikiLine(w: WikiConfig): string {
+  return `Wiki: before work that may have history, wiki_search. Save with wiki_save what will matter in a future session and can't be found in the code, git history or docs, with the reason; update a page instead of adding a near-duplicate; never save personal details or secrets.${w.guide ? ` Read the page ${w.guide} before your first save.` : ''}`;
+}
 
 function text(s: string) {
   return { content: [{ type: 'text' as const, text: s }] };
@@ -68,8 +81,8 @@ function nextChange(store: Store, ms: number, signal: AbortSignal): Promise<void
   });
 }
 
-export function createTeamServer(store: Store, me: string, boardHtml: () => string): McpServer {
-  const server = new McpServer({ name: 'agent-team-up', version: VERSION }, { instructions: INSTRUCTIONS });
+export function createTeamServer(store: Store, me: string, boardHtml: () => string, wikiCfg?: WikiConfig): McpServer {
+  const server = new McpServer({ name: 'agent-team-up', version: VERSION }, { instructions: wikiCfg ? `${INSTRUCTIONS}\n${wikiLine(wikiCfg)}` : INSTRUCTIONS });
 
   server.registerTool(
     'team',
@@ -239,5 +252,66 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     contents: [{ uri: BOARD_URI, mimeType: RESOURCE_MIME_TYPE, text: boardHtml() }],
   }));
 
+  if (wikiCfg) registerWiki(server, store, me, wikiCfg);
+
   return server;
 }
+
+function registerWiki(server: McpServer, store: Store, me: string, cfg: WikiConfig): void {
+  const { wiki } = cfg;
+  const slugArg = z.string().describe('Page name: lower-case letters, digits and dashes.');
+
+  server.registerTool(
+    'wiki_search',
+    {
+      title: 'Search the wiki',
+      description: 'Search the team wiki. Returns up to 8 pages: slug, title, description and a snippet.',
+      inputSchema: { query: z.string().min(1).max(300).describe('A few words.') },
+      annotations: { readOnlyHint: true },
+    },
+    guard((a: { query: string }) => {
+      const hits = wiki.search(a.query);
+      if (!hits.length) return text('No pages match.');
+      return text(hits.map((h) => `${h.slug}: ${h.title} - ${h.description}${h.snippet ? `\n  ${h.snippet}` : ''}`).join('\n'));
+    }),
+  );
+
+  server.registerTool(
+    'wiki_read',
+    {
+      title: 'Read a wiki page',
+      description: 'A page as Markdown with its version (pass it to wiki_save to change the page) and the pages it links to and from.',
+      inputSchema: { slug: slugArg },
+      annotations: { readOnlyHint: true },
+    },
+    guard((a: { slug: string }) => {
+      const p = wiki.page(a.slug);
+      if (!p) return fail(`No page "${a.slug}". Try wiki_search.`);
+      const out = wiki.linksTo(p.slug);
+      return text(`version: ${p.version}\nlinks to: ${p.links.join(', ') || '-'}\nlinked from: ${out.join(', ') || '-'}\n\n${p.raw}`);
+    }),
+  );
+
+  server.registerTool(
+    'wiki_save',
+    {
+      title: 'Save a wiki page',
+      description:
+        'Create a page or replace one. content is the whole page, starting with frontmatter (title, description, optional tags and aliases); link pages with [[slug]]. To change an existing page, wiki_read it first and pass its version. No personal details, emails, home paths or secrets.',
+      inputSchema: {
+        slug: slugArg,
+        content: z.string().min(1).describe('The whole page, frontmatter included. At most 40 KB.'),
+        message: z.string().min(1).max(200).describe('What changed and why, one line.'),
+        version: z.string().optional().describe('The version from wiki_read. Required when the page exists.'),
+      },
+    },
+    guard(async (a: { slug: string; content: string; message: string; version?: string }) => {
+      if (cfg.writers && !cfg.writers.includes(me)) return fail("You can't save to the wiki. You can search and read it.");
+      if (!SLUG.test(a.slug)) return fail('slug must be lower-case letters, digits and dashes.');
+      const r = await wiki.save({ ...a, agent: me });
+      store.noteWiki(me, r.slug);
+      return text(`${r.created ? 'Created' : 'Saved'} ${r.slug}. version: ${r.version}${r.note ? `\n${r.note}` : ''}`);
+    }),
+  );
+}
+

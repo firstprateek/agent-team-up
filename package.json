@@ -1,6 +1,6 @@
 {
   "name": "agent-team-up",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One MCP server for a team of coding agents across apps and subscriptions: goals, tasks, handoffs, questions and a live board.",
   "keywords": [
     "mcp",
@@ -31,7 +31,7 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp src/board.html dist/board.html",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp src/board.html src/wiki.html dist/",
     "typecheck": "tsc -p .",
     "test": "node --test --test-concurrency=1 'test/*.test.ts'",
     "check": "npm run typecheck && npm test",

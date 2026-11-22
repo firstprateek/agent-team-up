@@ -6,14 +6,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { Readable } from 'node:stream';
 import { toWebRequest } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
-import { createTeamServer } from './mcp.ts';
+import { createTeamServer, type WikiConfig } from './mcp.ts';
 import { GOAL_STATES, type Store, TASK_STATES, TeamError } from './store.ts';
 import { boardState } from './view.ts';
+import { NotFound, SLUG } from './wiki.ts';
 
 export interface HubOptions {
   store: Store;
   /** Extra host names clients use to reach the hub (for example a tailnet name). Loopback names are always allowed. */
   allowedHosts?: string[];
+  /** The team wiki: the tools, /wiki and /api/wiki/*. Off when left out. */
+  wiki?: WikiConfig;
 }
 
 const LOOPBACK = ['localhost', '127.0.0.1', '[::1]', '::1'];
@@ -22,6 +25,26 @@ const MAX_BODY = 64 * 1024;
 
 export function loadBoardHtml(): string {
   return readFileSync(new URL('./board.html', import.meta.url), 'utf8');
+}
+
+export function loadWikiHtml(): string {
+  return readFileSync(new URL('./wiki.html', import.meta.url), 'utf8');
+}
+
+/** The Content-Security-Policy that lets a page run only its own inline script. */
+function cspFor(html: string): string {
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? '';
+  const hash = createHash('sha256').update(script).digest('base64');
+  return [
+    "default-src 'none'",
+    `script-src 'sha256-${hash}'`,
+    "style-src 'unsafe-inline'",
+    "connect-src 'self'",
+    "img-src 'self' data:",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ');
 }
 
 function hostName(host: string | undefined): string {
@@ -86,32 +109,20 @@ function int(v: unknown, field: string): number {
   return n;
 }
 
-export function createHub({ store, allowedHosts = [] }: HubOptions): Server {
+export function createHub({ store, allowedHosts = [], wiki: wikiCfg }: HubOptions): Server {
   const hosts = new Set([...LOOPBACK, ...allowedHosts.map((h) => h.toLowerCase())]);
+  const wiki = wikiCfg?.wiki;
   let html = loadBoardHtml();
-  let csp = '';
-  const refresh = () => {
-    const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? '';
-    const hash = createHash('sha256').update(script).digest('base64');
-    csp = [
-      "default-src 'none'",
-      `script-src 'sha256-${hash}'`,
-      "style-src 'unsafe-inline'",
-      "connect-src 'self'",
-      "img-src 'self' data:",
-      "base-uri 'none'",
-      "form-action 'none'",
-      "frame-ancestors 'none'",
-    ].join('; ');
-  };
-  refresh();
+  let csp = cspFor(html);
+  let wikiHtml = wiki ? loadWikiHtml() : '';
+  let wikiCsp = cspFor(wikiHtml);
   // While working on the board, re-read it on every request.
   const dev = Boolean(process.env.AGENT_TEAM_UP_DEV);
 
   const mcp = createMcpHandler((ctx) => {
     const me = ctx.authInfo?.clientId;
     if (!me) throw new Error('unauthenticated MCP request reached the handler');
-    return createTeamServer(store, me, () => html);
+    return createTeamServer(store, me, () => html, wikiCfg);
   });
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -173,6 +184,30 @@ export function createHub({ store, allowedHosts = [] }: HubOptions): Server {
     });
   }
 
+  async function handleWikiApi(req: IncomingMessage, res: ServerResponse, path: string, method: string): Promise<void> {
+    if (!wiki) return send(res, 404, { error: 'The wiki is not enabled (start serve with --wiki).' });
+    if (method !== 'GET') return send(res, 405, { error: 'Method not allowed.' });
+    const q = new URL(req.url ?? '/', 'http://x').searchParams;
+    try {
+      if (path === '/api/wiki/pages') {
+        return send(res, 200, wiki.pages().map((p) => ({ slug: p.slug, title: p.meta.title, description: p.meta.description, tags: p.meta.tags, aliases: p.meta.aliases, updated: p.meta.updated, links: p.links })));
+      }
+      if (path === '/api/wiki/page') {
+        const slug = q.get('slug') ?? '';
+        const p = SLUG.test(slug) ? wiki.page(slug) : undefined;
+        if (!p) return send(res, 404, { error: 'No such page.' });
+        return send(res, 200, { slug, meta: p.meta, body: p.body, version: p.version, linksOut: p.links, linksIn: wiki.linksTo(slug), history: await wiki.history(slug), git: await wiki.isRepo() });
+      }
+      if (path === '/api/wiki/search') return send(res, 200, wiki.search(q.get('q') ?? ''));
+      if (path === '/api/wiki/changes') return send(res, 200, await wiki.changes());
+      if (path === '/api/wiki/commit') return send(res, 200, await wiki.commit(q.get('sha') ?? ''));
+    } catch (err) {
+      if (err instanceof NotFound) return send(res, 404, { error: err.message });
+      throw err;
+    }
+    send(res, 404, { error: 'Not found.' });
+  }
+
   async function handleApi(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
     const method = req.method ?? 'GET';
     if (method !== 'GET' && !sameOrigin(req)) {
@@ -200,7 +235,8 @@ export function createHub({ store, allowedHosts = [] }: HubOptions): Server {
       send(res, 200, { ok: true }, { 'set-cookie': `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
       return;
     }
-    if (path === '/api/state' && method === 'GET') return send(res, 200, boardState(store));
+    if (path === '/api/state' && method === 'GET') return send(res, 200, { ...boardState(store), wiki: Boolean(wiki) });
+    if (path.startsWith('/api/wiki/')) return await handleWikiApi(req, res, path, method);
     if (path === '/api/stream' && method === 'GET') return stream(req, res);
     if (method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
 
@@ -270,19 +306,23 @@ export function createHub({ store, allowedHosts = [] }: HubOptions): Server {
         res.end();
         return;
       }
-      if (path === '/board' && req.method === 'GET') {
+      if ((path === '/board' || (path === '/wiki' && wiki)) && req.method === 'GET') {
         if (dev) {
           html = loadBoardHtml();
-          refresh();
+          csp = cspFor(html);
+          if (wiki) {
+            wikiHtml = loadWikiHtml();
+            wikiCsp = cspFor(wikiHtml);
+          }
         }
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
-          'content-security-policy': csp,
+          'content-security-policy': path === '/wiki' ? wikiCsp : csp,
           'x-content-type-options': 'nosniff',
           'referrer-policy': 'same-origin', // no-referrer would make browsers send Origin: null
         });
-        res.end(html);
+        res.end(path === '/wiki' ? wikiHtml : html);
         return;
       }
       if (path.startsWith('/api/')) return await handleApi(req, res, path);

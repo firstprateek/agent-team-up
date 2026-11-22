@@ -4,9 +4,13 @@ import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createHub } from '../src/http.ts';
 import { BOARD_URI } from '../src/mcp.ts';
 import { Store } from '../src/store.ts';
+import { Wiki } from '../src/wiki.ts';
 
 let store: Store;
 let base: string;
@@ -283,5 +287,122 @@ describe('owner API', () => {
     await ownerFetch('/api/messages', { to: 'all', text: 'ping' });
     assert.match(await seen, /event: change/);
     ctrl.abort();
+  });
+});
+
+describe('wiki', () => {
+  let wdir: string;
+  let wbase: string;
+  let wclose: () => Promise<void>;
+  const fm = (title: string, desc: string, body = 'Body.') => `---\ntitle: ${title}\ndescription: ${desc}\n---\n${body}\n`;
+
+  before(async () => {
+    wdir = mkdtempSync(join(tmpdir(), 'hub-wiki-'));
+    mkdirSync(join(wdir, 'pages'));
+    writeFileSync(join(wdir, 'pages', 'hub.md'), fm('The hub', 'Where the team hub runs', 'Runs behind tailscale. See [[missing]].'));
+    const hub = createHub({ store, wiki: { wiki: new Wiki(wdir), writers: ['claude', 'codex'], guide: 'conventions' } });
+    await new Promise<void>((r) => hub.listen(0, '127.0.0.1', r));
+    wbase = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+    wclose = () => new Promise((r) => { hub.closeAllConnections(); hub.close(() => r()); });
+  });
+  after(async () => {
+    await wclose();
+    rmSync(wdir, { recursive: true, force: true });
+  });
+
+  async function wconnect(name: string): Promise<Client> {
+    const c = new Client({ name: `test-${name}`, version: '0' });
+    await c.connect(new StreamableHTTPClientTransport(new URL(`${wbase}/mcp`), { requestInit: { headers: { authorization: `Bearer ${keys[name]}` } } }));
+    return c;
+  }
+  const wowner = (path: string) => fetch(`${wbase}${path}`, { headers: { authorization: `Bearer ${ownerKey}` } });
+
+  test('tools appear only with a wiki, and the instructions gain a line', async () => {
+    const plain = await connect('claude');
+    assert.ok(!(await plain.listTools()).tools.some((t) => t.name.startsWith('wiki_')));
+    assert.doesNotMatch(plain.getInstructions() ?? '', /wiki_search/);
+    await plain.close();
+    const c = await wconnect('claude');
+    const names = (await c.listTools()).tools.map((t) => t.name);
+    assert.deepEqual(names.filter((n) => n.startsWith('wiki_')).sort(), ['wiki_read', 'wiki_save', 'wiki_search']);
+    assert.match(c.getInstructions() ?? '', /wiki_search.*Read the page conventions before your first save/);
+    await c.close();
+  });
+
+  test('search, read, save, version conflict, privacy refusal, non-writer', async () => {
+    const claude = await wconnect('claude');
+    const codex = await wconnect('codex');
+    const gemini = await wconnect('gemini');
+    assert.match(await call(claude, 'wiki_search', { query: 'hub behind tailscale' }), /^hub: The hub - Where the team hub runs\n  .*tailscale/);
+    assert.equal(await call(claude, 'wiki_search', { query: 'zebra' }), 'No pages match.');
+    const read = await call(claude, 'wiki_read', { slug: 'hub' });
+    assert.match(read, /^version: [0-9a-f]{64}\nlinks to: missing\nlinked from: -\n\n---\ntitle: The hub/);
+    await assert.rejects(call(claude, 'wiki_read', { slug: 'nope' }), /No page/);
+    const version = /version: (\w+)/.exec(read)![1];
+
+    const made = await call(claude, 'wiki_save', { slug: 'decisions', content: fm('Decisions', 'Why we chose things', 'See [[hub]].'), message: 'first' });
+    assert.match(made, /^Created decisions\. version: [0-9a-f]{64}$/);
+    assert.match(await call(claude, 'wiki_read', { slug: 'hub' }), /links to: missing/);
+    assert.match(await call(codex, 'wiki_read', { slug: 'hub' }), /linked from: decisions/);
+
+    await call(claude, 'wiki_save', { slug: 'hub', content: fm('The hub', 'Edited', 'x'), message: 'edit', version });
+    await assert.rejects(call(codex, 'wiki_save', { slug: 'hub', content: fm('The hub', 'Stale', 'y'), message: 'stale', version }), /changed since you read it; read it again/);
+    await assert.rejects(call(codex, 'wiki_save', { slug: 'leaky', content: fm('Leak', 'd', 'password: supersecret123'), message: 'x' }), (e: Error) => /a password or secret/.test(e.message) && !/supersecret/.test(e.message));
+    await assert.rejects(call(gemini, 'wiki_save', { slug: 'g', content: fm('G', 'd'), message: 'x' }), /can't save/);
+    assert.match(await call(gemini, 'wiki_read', { slug: 'decisions' }), /Why we chose things/);
+    const state = await (await wowner('/api/state')).json();
+    assert.ok(state.events.some((e: { sender: string; audience: string; text: string }) => e.sender === 'claude' && e.audience === 'log' && e.text === 'saved wiki page decisions.'));
+    assert.equal(state.wiki, true);
+    await claude.close();
+    await codex.close();
+    await gemini.close();
+  });
+
+  test('the API needs the owner, and answers for the owner', async () => {
+    for (const path of ['/api/wiki/pages', '/api/wiki/page?slug=hub', '/api/wiki/search?q=hub', '/api/wiki/changes', '/api/wiki/commit?sha=abcdef0']) {
+      assert.equal((await fetch(`${wbase}${path}`)).status, 401, path);
+      assert.equal((await fetch(`${wbase}${path}`, { headers: { authorization: `Bearer ${keys.claude}` } })).status, 401, `${path} with an agent key`);
+    }
+    const pages = await (await wowner('/api/wiki/pages')).json();
+    assert.ok(pages.some((p: { slug: string; links: string[] }) => p.slug === 'hub'));
+    const page = await (await wowner('/api/wiki/page?slug=hub')).json();
+    assert.equal(page.slug, 'hub');
+    assert.equal(page.git, false);
+    assert.deepEqual(page.history, []);
+    assert.ok(Array.isArray(page.linksIn));
+    assert.equal((await wowner('/api/wiki/page?slug=nope')).status, 404);
+    assert.equal((await wowner('/api/wiki/page?slug=../x')).status, 404);
+    assert.ok((await (await wowner('/api/wiki/search?q=hub+tailscale')).json()).length >= 1);
+    assert.deepEqual(await (await wowner('/api/wiki/changes')).json(), []);
+    assert.equal((await wowner('/api/wiki/commit?sha=zzz')).status, 400);
+    assert.equal((await wowner('/api/wiki/commit?sha=abcdef0')).status, 404);
+    const post = await fetch(`${wbase}/api/wiki/pages`, { method: 'POST', headers: { authorization: `Bearer ${ownerKey}`, 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(post.status, 405);
+  });
+
+  test('/wiki has its own script-only CSP, and the Host check applies', async () => {
+    const r = await fetch(`${wbase}/wiki`);
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    assert.doesNotMatch(html, /innerHTML/);
+    const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1];
+    const hash = createHash('sha256').update(script).digest('base64');
+    const csp = r.headers.get('content-security-policy')!;
+    assert.match(csp, new RegExp(`script-src 'sha256-${hash.replace(/[+/]/g, '\\$&')}'`));
+    assert.match(csp, /frame-ancestors 'none'/);
+    const u = new URL(wbase);
+    const evil = await new Promise<number>((resolve, reject) => {
+      const req = request({ host: u.hostname, port: u.port, path: '/wiki', headers: { host: 'evil.example' } }, (res) => { res.resume(); resolve(res.statusCode!); });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(evil, 403);
+  });
+
+  test('without --wiki: /wiki and the API are 404', async () => {
+    assert.equal((await fetch(`${base}/wiki`)).status, 404);
+    assert.equal((await ownerFetch('/api/wiki/pages')).status, 404);
+    assert.equal((await ownerFetch('/api/wiki/search?q=x')).status, 404);
+    assert.equal((await (await ownerFetch('/api/state')).json()).wiki, false);
   });
 });

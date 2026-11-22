@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // agent-team-up: init | add | rotate | remove | list | owner-key | serve | run
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createHub } from './http.ts';
-import { VERSION } from './mcp.ts';
+import { VERSION, type WikiConfig } from './mcp.ts';
 import { defaultLogs, defaultWorktrees, killActiveGroups, parseDuration, runLoop } from './runner.ts';
 import { Store, TeamError } from './store.ts';
 import { ago } from './view.ts';
+import { SLUG, Wiki } from './wiki.ts';
 
 const HELP = `agent-team-up ${VERSION}: one MCP server for a team of coding agents across apps and subscriptions.
 
@@ -21,6 +22,10 @@ Usage:
   agent-team-up list                          List agents.
   agent-team-up owner-key                     Make a new owner key (signs out every board).
   agent-team-up serve [--port 7600] [--host 127.0.0.1] [--allowed-host name]...
+                      [--wiki dir] [--wiki-writers a,b,...] [--wiki-guide slug]
+                                            --wiki adds wiki_search/wiki_read/wiki_save and /wiki (a folder of
+                                            pages/<slug>.md; git-committed if it is a repo). --wiki-writers limits
+                                            who may save (default: every agent); --wiki-guide names a page to read first.
   agent-team-up run <agent> [--hub url] [--key-file path] [--poll s] [--timeout 30m]
                     [--worktrees dir] [--logs dir] [--prompt-stdin] -- <command> [args...]
                                             Run a headless agent on tasks aimed at <agent>; {prompt} is replaced.
@@ -109,6 +114,9 @@ export async function main(argv: string[]): Promise<void> {
       port: { type: 'string', default: '7600' },
       host: { type: 'string', default: '127.0.0.1' },
       'allowed-host': { type: 'string', multiple: true, default: [] },
+      wiki: { type: 'string' },
+      'wiki-writers': { type: 'string' },
+      'wiki-guide': { type: 'string' },
       strengths: { type: 'string', default: '' },
       url: { type: 'string' },
       'key-file': { type: 'string' },
@@ -180,12 +188,25 @@ export async function main(argv: string[]): Promise<void> {
       case 'serve': {
         needInit();
         store.watch();
-        const hub = createHub({ store, allowedHosts: values['allowed-host'] });
+        let wiki: WikiConfig | undefined;
+        if (values.wiki) {
+          const dir = resolve(values.wiki.replace(/^~(?=\/|$)/, homedir()));
+          if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) fail(`--wiki ${values.wiki} isn't a folder.`);
+          const guide = values['wiki-guide'];
+          if (guide && !SLUG.test(guide)) fail(`--wiki-guide ${guide} isn't a page name.`);
+          const writers = values['wiki-writers']?.split(',').map((x) => x.trim()).filter(Boolean);
+          const known = new Set(store.agents().map((a) => a.name));
+          for (const w of writers ?? []) if (!known.has(w)) fail(`--wiki-writers: no agent called ${w}.`);
+          wiki = { wiki: new Wiki(dir), writers, guide };
+        } else if (values['wiki-writers'] || values['wiki-guide']) {
+          fail('--wiki-writers and --wiki-guide need --wiki <dir>.');
+        }
+        const hub = createHub({ store, allowedHosts: values['allowed-host'], wiki });
         hub.listen(port, values.host, () => {
           const addr = hub.address();
           const p = typeof addr === 'object' && addr ? addr.port : port;
           const h = values.host.includes(':') ? `[${values.host}]` : values.host;
-          process.stdout.write(`agent-team-up ${VERSION} on http://${h}:${p}\n  MCP:   http://${h}:${p}/mcp\n  Board: http://${h}:${p}/board\n`);
+          process.stdout.write(`agent-team-up ${VERSION} on http://${h}:${p}\n  MCP:   http://${h}:${p}/mcp\n  Board: http://${h}:${p}/board\n${wiki ? `  Wiki:  http://${h}:${p}/wiki\n` : ''}`);
         });
         const stop = () => {
           hub.close();

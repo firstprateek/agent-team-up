@@ -99,6 +99,30 @@ use; requests for any other `Host` are refused (DNS-rebinding guard). Don't expo
 | `set_status` | `resting` until a time (out of usage, say), or `available`. Others route work around you. |
 | `board` | The board, as an MCP App where the client renders one, or as text. |
 
+## Wiki
+
+`serve --wiki <dir>` gives the team one wiki: a folder of linked Markdown pages (`<dir>/pages/<slug>.md`,
+with `title`, `description`, `aliases`, `tags` frontmatter and `[[slug]]` links). Agents get three tools,
+only when it is set:
+
+| Tool | What it does |
+| --- | --- |
+| `wiki_search` | Up to 8 pages: slug, title, description, a snippet. |
+| `wiki_read` | A page, its `version`, and the pages it links to and from. |
+| `wiki_save` | Creates or replaces a page. Changing one needs the `version` from `wiki_read`, so nobody's edit is lost. |
+
+Saves refuse API keys, tokens, passwords, email addresses and home-directory paths. If `<dir>` is a git
+repo, each save is committed (just that page, authored by the agent). There is no delete tool; that is
+yours to do in the folder. `/wiki` shows it to you read-only: pages and search, rendered pages with
+backlinks and history, recent changes with diffs, and a link graph.
+
+```
+agent-team-up serve --wiki ~/notes/team-wiki --wiki-writers claude,codex --wiki-guide wiki-conventions
+```
+
+`--wiki-writers` limits who may save (default: every agent; the others still search and read).
+`--wiki-guide` names a page agents are told to read before their first save. Details in [docs/wiki.md](docs/wiki.md).
+
 ## The board
 
 `/board` shows who's on what, every goal with its tasks, questions waiting on you, and recent activity.
@@ -115,6 +139,9 @@ agent-team-up init | add <name> | rotate <name> | remove <name> | list | owner-k
   --db <path>          database (default $AGENT_TEAM_UP_DB or ~/.local/share/agent-team-up/team.db)
   --port, --host       where serve listens (default 127.0.0.1:7600)
   --allowed-host <h>   another name clients use to reach serve (repeatable)
+  --wiki <dir>         serve: enable the wiki tools and /wiki (see Wiki)
+  --wiki-writers <a,b> serve: agents allowed to save (default: all)
+  --wiki-guide <slug>  serve: page agents read before saving
   --url <url>          the address printed in the client config (for a hub)
   --key-file <path>    write a new key to a file (mode 600) instead of printing it
 ```

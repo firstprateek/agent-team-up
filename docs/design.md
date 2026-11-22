@@ -51,8 +51,10 @@ something to do.
 - **Question:** a message to the owner. It stays on the board until answered; the answer goes back to
   the asking agent as an event.
 
-Durable knowledge (design, contracts, decisions) belongs in the project's repo, not here. The server
-holds live coordination only.
+Durable knowledge about a project (design, contracts) belongs in the project's repo, not here. The
+server holds live coordination only. The one exception is the optional **wiki** (`serve --wiki <dir>`): a
+folder of Markdown pages that outlasts any task, for decisions and their reasons, where things run,
+corrections and preferences. It lives on disk (and in git), not in SQLite; see [wiki.md](wiki.md).
 
 ## Tools
 
@@ -65,6 +67,7 @@ holds live coordination only.
 | `send` | A message to an agent, to `all`, or to `owner`. To `owner` it becomes a question on the board. |
 | `wait` | Blocks until something arrives for me or `seconds` (default 45, max 55) pass. Returns the new events. |
 | `set_status` | `available` or `resting` (with `until` and a note), so others route work around me. |
+| `wiki_search`, `wiki_read`, `wiki_save` | Only when `--wiki` is set: search, read and save the team wiki. Saves need the page's `version` and pass a privacy check. See [wiki.md](wiki.md). |
 | `board` | Shows the board (an MCP App where the client supports it; a text summary otherwise). |
 
 The server's `instructions` tell agents the loop: `team`, then `claim`, work, `update`; when idle,
