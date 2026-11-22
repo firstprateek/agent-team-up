@@ -30,12 +30,15 @@ const BODY_COLUMN = 4;
 
 /** The words of a query worth searching for, longest first (wiki.py `terms`). */
 export function terms(text: string): string[] {
-  const words = [...new Set((text.match(/[^\W_]{3,}/gu) ?? []).map((w) => w.toLowerCase()))];
-  return words.filter((w) => !STOPWORDS.has(w) && !/^\p{Nd}+$/u.test(w)).sort((a, b) => b.length - a.length).slice(0, MAX_TERMS);
+  const words = [...new Set((text.match(/[\p{L}\p{N}]{3,}/gu) ?? []).map((w) => w.toLowerCase()))];
+  return words.filter((w) => !STOPWORDS.has(w) && !/^[\p{Nd}\p{No}]+$/u.test(w)).sort((a, b) => b.length - a.length).slice(0, MAX_TERMS);
 }
 
+/** Identifies one version of a file; the page cache and the index must agree on it. */
+const fileKey = (st: { mtimeNs: bigint; ctimeNs: bigint; size: bigint; ino: bigint }) => `${st.mtimeNs}:${st.ctimeNs}:${st.size}:${st.ino}`;
+
 /** An FTS5 string literal: nothing inside it is syntax. */
-const quote = (t: string) => `"${t.replace(/"/g, '""')}"`;
+export const quote = (t: string) => `"${t.replace(/"/g, '""')}"`;
 
 export class NotFound extends TeamError {}
 
@@ -221,7 +224,7 @@ export class Wiki {
         this.cache.delete(slug);
         return undefined;
       }
-      key = `${st.mtimeNs}:${st.ctimeNs}:${st.size}:${st.ino}`;
+      key = fileKey(st);
     } catch {
       this.cache.delete(slug);
       return undefined;
@@ -256,10 +259,19 @@ export class Wiki {
         this.warned = true;
         console.error(`wiki: SQLite search failed, using the plain scan instead: ${(err as Error).message}`);
       }
-      this.index = undefined;
-      this.indexed.clear();
+      this.dropIndex();
       return this.searchScan(words, limit);
     }
+  }
+
+  private dropIndex() {
+    try {
+      this.index?.close();
+    } catch {
+      // already closed or broken; dropping it is all that matters
+    }
+    this.index = undefined;
+    this.indexed.clear();
   }
 
   private db(): DatabaseSync {
@@ -294,7 +306,7 @@ export class Wiki {
       try {
         const st = lstatSync(this.file(slug), { bigint: true });
         if (!st.isFile()) continue;
-        key = `${st.mtimeNs}:${st.size}`;
+        key = fileKey(st);
       } catch {
         continue;
       }
@@ -331,7 +343,7 @@ export class Wiki {
     try {
       const st = lstatSync(this.file(slug), { bigint: true });
       if (!st.isFile()) return;
-      key = `${st.mtimeNs}:${st.size}`;
+      key = fileKey(st);
     } catch {
       return;
     }
@@ -474,8 +486,7 @@ export class Wiki {
           throw err;
         }
       } catch {
-        this.index = undefined; // rebuilt (or the scan fallback used) on the next search
-        this.indexed.clear();
+        this.dropIndex(); // rebuilt (or the scan fallback used) on the next search
       }
     }
 

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, sy
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { NotFound, Wiki, extractLinks, parseMeta, privacyProblems, splitFrontmatter } from '../src/wiki.ts';
+import { NotFound, Wiki, extractLinks, parseMeta, privacyProblems, quote, splitFrontmatter, terms } from '../src/wiki.ts';
 
 let dir: string;
 beforeEach(() => {
@@ -185,6 +185,34 @@ describe('reading and search', () => {
     put('b', page('B', 'b', 'nothing'));
     assert.deepEqual(w.linksTo('b'), ['a']);
     assert.deepEqual(w.linksTo('a'), []);
+  });
+
+  test('Unicode words are whole terms, like wiki.py', () => {
+    assert.deepEqual(terms('café crème'), ['crème', 'café']);
+    assert.deepEqual(terms('Zürich naïve 123 ²³⁴'), ['zürich', 'naïve']);
+    put('zurich', page('Zürich office', 'Where the office is'));
+    put('editor', page('Editor', 'The rich text editor'));
+    put('cafe', page('Café', 'Coffee notes'));
+    const w = new Wiki(dir);
+    assert.deepEqual(w.search('Zürich').map((h) => h.slug), ['zurich']);
+    assert.deepEqual(w.search('café').map((h) => h.slug), ['cafe']);
+  });
+
+  test('a same-size edit that keeps the mtime still reaches the index', () => {
+    const f = join(dir, 'pages', 'a.md');
+    put('a', page('A', 'Page a', 'token SECRETVALUE1234 here'));
+    const t = new Date('2026-01-01T00:00:00Z');
+    utimesSync(f, t, t);
+    const w = new Wiki(dir);
+    assert.deepEqual(w.search('secretvalue1234').map((h) => h.slug), ['a']);
+    put('a', page('A', 'Page a', 'token XXXXXXXXXXXXXXX here'));
+    utimesSync(f, t, t);
+    assert.deepEqual(w.search('secretvalue1234'), []);
+    assert.deepEqual(w.search('xxxxxxxxxxxxxxx').map((h) => h.slug), ['a']);
+  });
+
+  test('quote() makes any string an FTS5 literal', () => {
+    assert.equal(quote('a" OR *'), '"a"" OR *"');
   });
 });
 

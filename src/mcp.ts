@@ -7,7 +7,7 @@ import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
 import { SLUG, type Wiki } from './wiki.ts';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0';
 export const BOARD_URI = 'ui://agent-team-up/board.html';
 const WAIT_DEFAULT = 45;
 const WAIT_MAX = 55;

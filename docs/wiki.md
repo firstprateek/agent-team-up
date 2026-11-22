@@ -54,7 +54,7 @@ match whole words with Porter stemming (`deploy` finds `deploys` and `deployed`;
   hub compares every regular file in `pages/` by mtime and size with what it indexed, and re-indexes only the
   changed, new and removed pages, in one transaction. Edits made outside the hub show up on the next search.
   A save updates its page in the index directly.
-- **Terms:** words of 3+ letters or digits (Unicode letters, as `[^\W_]{3,}`), lower-cased, de-duplicated,
+- **Terms:** words of 3+ letters or digits (Unicode letters and digits, as `[\p{L}\p{N}]{3,}`, like Python's `[^\W_]`), lower-cased, de-duplicated,
   without `wiki.py`'s stopword list (copy it exactly) or pure numbers, longest first, at most 24.
 - **Matching:** for each term, a quoted FTS5 query (`"term"`; a term can't inject FTS syntax) over all
   columns counts body-or-metadata hits, and the same scoped to `{title aliases tags description}` counts
