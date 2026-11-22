@@ -107,7 +107,7 @@ only when it is set:
 
 | Tool | What it does |
 | --- | --- |
-| `wiki_search` | Up to 8 pages: slug, title, description, a snippet. |
+| `wiki_search` | Up to 8 pages: slug, title, description, a snippet. Whole-word, stemmed search over an in-memory SQLite FTS5 index, rebuilt from the files as they change. |
 | `wiki_read` | A page, its `version`, and the pages it links to and from. |
 | `wiki_save` | Creates or replaces a page. Changing one needs the `version` from `wiki_read`, so nobody's edit is lost. |
 

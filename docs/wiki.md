@@ -44,11 +44,30 @@ Body in Markdown. Links to other pages are [[slug]].
 | `wiki_read` | `slug` -> the page as Markdown, its `version`, and the pages it links to and from. |
 | `wiki_save` | `slug`, `content` (the whole page, frontmatter included), `message`, and `version` when changing an existing page. |
 
-**Search** works like the owner's `wiki.py`, so results feel the same in every app: split the query into
-words (3+ letters, stopwords dropped), then a page qualifies if a word is in its title, aliases, tags or
-description, or if at least `min(max(2, ceil(25% of the words)), number of words)` of the words are in its body (so a single word can match body text). Order by
-metadata hits, then body hits, then slug. The snippet is about 30 words around the first body hit. Plain
-in-memory scoring over the cached pages; no index file. Fine for hundreds of pages.
+**Search** uses a SQLite FTS5 index, built the same way as the owner's `wiki.py` (`tokenize="porter
+unicode61"`, columns `title, aliases, tags, description, body`), so results feel the same in every app and
+match whole words with Porter stemming (`deploy` finds `deploys` and `deployed`; `ops` no longer matches inside
+`stops`). Porter does not join every derived form: `deploy` does not find `deployment`.
+
+- **The index** lives in an in-memory database (`node:sqlite`, `:memory:`), never a file: the hub still
+  writes nothing in the folder except pages. Before each search (and each page listing that needs it) the
+  hub compares every regular file in `pages/` by mtime and size with what it indexed, and re-indexes only the
+  changed, new and removed pages, in one transaction. Edits made outside the hub show up on the next search.
+  A save updates its page in the index directly.
+- **Terms:** words of 3+ letters or digits (Unicode letters, as `[^\W_]{3,}`), lower-cased, de-duplicated,
+  without `wiki.py`'s stopword list (copy it exactly) or pure numbers, longest first, at most 24.
+- **Matching:** for each term, a quoted FTS5 query (`"term"`; a term can't inject FTS syntax) over all
+  columns counts body-or-metadata hits, and the same scoped to `{title aliases tags description}` counts
+  metadata hits. A page qualifies if it has a metadata hit or at least `min(max(2, ceil(25% of the terms)),
+  number of terms)` hits (so a single word can match body text; this clamp is the one deliberate difference
+  from `wiki.py`). Order by metadata hits, then all hits, then slug. No bm25: in a small wiki its scores
+  collapse to almost zero, which is why `wiki.py` counts coverage instead.
+- **Snippet:** FTS5 `snippet()` on the body column with the terms OR-ed, 32 tokens, `' … '` as the
+  ellipsis, whitespace collapsed. Empty if only metadata matched (unlike `wiki.py`, which then shows the start of the body).
+- **Results:** up to 8 for the tool and the API (unchanged shape: slug, title, description, snippet, plus
+  `updated`).
+- If the index can't be built (a SQLite error), search falls back to the old in-memory scoring and logs
+  the error once; it never fails the tool.
 
 **Save** rules, all enforced by the hub:
 

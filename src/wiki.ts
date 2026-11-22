@@ -1,4 +1,4 @@
-// The team wiki: a folder of Markdown pages (<dir>/pages/<slug>.md) read from disk, searched in memory,
+// The team wiki: a folder of Markdown pages (<dir>/pages/<slug>.md) read from disk, searched through an in-memory SQLite FTS5 index,
 // saved with a version check and a privacy check, and committed to git when the folder is a repo.
 // No HTTP or MCP in here.
 
@@ -7,14 +7,35 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { TeamError } from './store.ts';
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
 export const MAX_PAGE = 40 * 1024;
 const MAX_DIFF = 400 * 1024;
-const STOP = new Set(
-  'the and for are but not you all any can had her was one our out has have his how its may new now old see two way who did get let put say she too use that this with from what when where which will your about into than then them they were been does just like more most also some such only over very'.split(' '),
+// Copied from the owner's ~/.claude/wiki/wiki.py so results feel the same in every app.
+const STOPWORDS = new Set(
+  `about above after again all also always and any are around because been before being below
+between both but can cannot change could did does doing done down each else even every few fix
+for from further get got had has have having help her here hers him his how into its just know
+let like look make many may might more most much must need new not now off once one only other
+our out over own please put really run same see she should show some something still such sure
+take tell than that the their them then there these they thing things this those through too
+try under until update use used using very want was way well were what when where which while
+who whom why will with work would yes yet you your`.split(/\s+/),
 );
+const MAX_TERMS = 24;
+const MIN_BODY_SHARE = 0.25;
+const BODY_COLUMN = 4;
+
+/** The words of a query worth searching for, longest first (wiki.py `terms`). */
+export function terms(text: string): string[] {
+  const words = [...new Set((text.match(/[^\W_]{3,}/gu) ?? []).map((w) => w.toLowerCase()))];
+  return words.filter((w) => !STOPWORDS.has(w) && !/^\p{Nd}+$/u.test(w)).sort((a, b) => b.length - a.length).slice(0, MAX_TERMS);
+}
+
+/** An FTS5 string literal: nothing inside it is syntax. */
+const quote = (t: string) => `"${t.replace(/"/g, '""')}"`;
 
 export class NotFound extends TeamError {}
 
@@ -37,6 +58,7 @@ export interface Hit {
   slug: string;
   title: string;
   description: string;
+  updated: string;
   snippet: string;
 }
 export interface Change {
@@ -148,6 +170,10 @@ export class Wiki {
   readonly dir: string;
   private cache = new Map<string, { key: string; page: Page }>();
   private queue: Promise<unknown> = Promise.resolve();
+  private index: DatabaseSync | undefined;
+  private indexed = new Map<string, { id: number; key: string }>();
+  private nextId = 1;
+  private warned = false;
 
   constructor(dir: string) {
     this.dir = dir;
@@ -219,10 +245,136 @@ export class Wiki {
     return this.pages().filter((p) => p.slug !== slug && p.links.includes(slug)).map((p) => p.slug).sort();
   }
 
+  /** Pages matching the query, best first (see docs/wiki.md). Falls back to a plain scan if SQLite fails. */
   search(query: string, limit = 8): Hit[] {
-    const words = [...new Set(query.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])].filter((w) => !STOP.has(w));
+    const words = terms(query);
     if (!words.length) return [];
-    const need = Math.min(Math.max(2, Math.ceil(words.length * 0.25)), words.length);
+    try {
+      return this.searchIndex(words, limit);
+    } catch (err) {
+      if (!this.warned) {
+        this.warned = true;
+        console.error(`wiki: SQLite search failed, using the plain scan instead: ${(err as Error).message}`);
+      }
+      this.index = undefined;
+      this.indexed.clear();
+      return this.searchScan(words, limit);
+    }
+  }
+
+  private db(): DatabaseSync {
+    if (this.index) return this.index;
+    const db = new DatabaseSync(':memory:');
+    try {
+      db.exec('CREATE VIRTUAL TABLE pages USING fts5(title, aliases, tags, description, body, tokenize="porter unicode61")');
+    } catch (err) {
+      db.close();
+      throw err;
+    }
+    this.index = db;
+    return db;
+  }
+
+  /** Brings the index in line with the folder: only new, changed (mtime or size) and removed files are touched. */
+  private syncIndex(): DatabaseSync {
+    const db = this.db();
+    let names: string[] = [];
+    try {
+      names = readdirSync(this.pagesDir);
+    } catch {
+      /* no pages folder yet */
+    }
+    const seen = new Set<string>();
+    const todo: string[] = [];
+    for (const n of names) {
+      if (!n.endsWith('.md')) continue;
+      const slug = n.slice(0, -3);
+      if (!SLUG.test(slug)) continue;
+      let key: string;
+      try {
+        const st = lstatSync(this.file(slug), { bigint: true });
+        if (!st.isFile()) continue;
+        key = `${st.mtimeNs}:${st.size}`;
+      } catch {
+        continue;
+      }
+      seen.add(slug);
+      if (this.indexed.get(slug)?.key !== key) todo.push(slug);
+    }
+    const gone = [...this.indexed.keys()].filter((k) => !seen.has(k));
+    if (!todo.length && !gone.length) return db;
+    db.exec('BEGIN');
+    try {
+      for (const slug of gone) this.unindex(db, slug);
+      for (const slug of todo) this.indexPage(db, slug);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      this.indexed.clear();
+      db.exec('DELETE FROM pages');
+      throw err;
+    }
+    return db;
+  }
+
+  private unindex(db: DatabaseSync, slug: string) {
+    const e = this.indexed.get(slug);
+    if (!e) return;
+    db.prepare('DELETE FROM pages WHERE rowid = ?').run(BigInt(e.id)); // node:sqlite binds plain numbers as REAL
+    this.indexed.delete(slug);
+  }
+
+  /** (Re)indexes one page from disk. Not a regular file, or unreadable: it is removed from the index. */
+  private indexPage(db: DatabaseSync, slug: string) {
+    this.unindex(db, slug);
+    let key: string;
+    try {
+      const st = lstatSync(this.file(slug), { bigint: true });
+      if (!st.isFile()) return;
+      key = `${st.mtimeNs}:${st.size}`;
+    } catch {
+      return;
+    }
+    this.cache.delete(slug);
+    const p = this.load(slug);
+    if (!p) return;
+    const id = this.nextId++;
+    db.prepare('INSERT INTO pages(rowid, title, aliases, tags, description, body) VALUES (?, ?, ?, ?, ?, ?)').run(BigInt(id), p.meta.title, p.meta.aliases.join(' '), p.meta.tags.join(' '), p.meta.description, p.body);
+    this.indexed.set(slug, { id, key });
+  }
+
+  private searchIndex(words: string[], limit: number): Hit[] {
+    const db = this.syncIndex();
+    const bySlug = new Map<number, string>();
+    for (const [slug, e] of this.indexed) bySlug.set(e.id, slug);
+    const all = new Map<number, number>();
+    const meta = new Map<number, number>();
+    const hitsAll = db.prepare('SELECT rowid FROM pages WHERE pages MATCH ?');
+    for (const w of words) {
+      for (const r of hitsAll.all(quote(w)) as { rowid: number }[]) all.set(r.rowid, (all.get(r.rowid) ?? 0) + 1);
+      for (const r of hitsAll.all(`{title aliases tags description} : ${quote(w)}`) as { rowid: number }[]) meta.set(r.rowid, (meta.get(r.rowid) ?? 0) + 1);
+    }
+    // The hub's one difference from wiki.py: never ask for more body hits than there are terms.
+    const need = Math.min(Math.max(2, Math.ceil(words.length * MIN_BODY_SHARE)), words.length);
+    const kept = [...all].filter(([id, n]) => meta.has(id) || n >= need).map(([id]) => id);
+    kept.sort((a, b) => (meta.get(b) ?? 0) - (meta.get(a) ?? 0) || all.get(b)! - all.get(a)! || bySlug.get(a)!.localeCompare(bySlug.get(b)!));
+    const any = words.map(quote).join(' OR ');
+    const snip = db.prepare(`SELECT snippet(pages, ${BODY_COLUMN}, '', '', ' … ', 32) AS s FROM pages WHERE pages MATCH ? AND rowid = ?`);
+    const inBody = new Set((db.prepare('SELECT rowid FROM pages WHERE pages MATCH ?').all(`{body} : (${any})`) as { rowid: number }[]).map((r) => r.rowid));
+    const out: Hit[] = [];
+    for (const id of kept) {
+      if (out.length >= limit) break;
+      const p = this.page(bySlug.get(id)!);
+      if (!p) continue;
+      const s = inBody.has(id) ? ((snip.get(any, BigInt(id)) as { s: string } | undefined)?.s ?? '') : '';
+      out.push({ slug: p.slug, title: p.meta.title, description: p.meta.description, updated: p.meta.updated, snippet: s.split(/\s+/).filter(Boolean).join(' ') });
+    }
+    return out;
+  }
+
+  /** The old in-memory scoring, kept as the fallback if SQLite fails. */
+  private searchScan(words: string[], limit: number): Hit[] {
+    const need = Math.min(Math.max(2, Math.ceil(words.length * MIN_BODY_SHARE)), words.length);
     const scored: { p: Page; meta: number; body: number; lower: string }[] = [];
     for (const p of this.pages()) {
       const head = [p.meta.title, ...p.meta.aliases, ...p.meta.tags, p.meta.description].join(' ').toLowerCase();
@@ -234,7 +386,7 @@ export class Wiki {
     scored.sort((a, b) => b.meta - a.meta || b.body - a.body || a.p.slug.localeCompare(b.p.slug));
     return scored.slice(0, limit).map(({ p, lower }) => {
       const at = words.map((w) => lower.indexOf(w)).filter((i) => i >= 0).sort((a, b) => a - b)[0];
-      return { slug: p.slug, title: p.meta.title, description: p.meta.description, snippet: at === undefined ? '' : snippet(p.body, at) };
+      return { slug: p.slug, title: p.meta.title, description: p.meta.description, updated: p.meta.updated, snippet: at === undefined ? '' : snippet(p.body, at) };
     });
   }
 
@@ -311,6 +463,21 @@ export class Wiki {
     }
     this.cache.delete(slug);
     const version = sha256(Buffer.from(content));
+    if (this.index) {
+      try {
+        this.index.exec('BEGIN');
+        try {
+          this.indexPage(this.index, slug);
+          this.index.exec('COMMIT');
+        } catch (err) {
+          this.index.exec('ROLLBACK');
+          throw err;
+        }
+      } catch {
+        this.index = undefined; // rebuilt (or the scan fallback used) on the next search
+        this.indexed.clear();
+      }
+    }
 
     let note = '';
     if (await this.isRepo()) {

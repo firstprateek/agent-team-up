@@ -121,6 +121,64 @@ describe('reading and search', () => {
     assert.equal(w.search('zebras').length, 8);
   });
 
+  test('search: stemming, whole words only', () => {
+    const w = new Wiki(dir);
+    put('rollout', page('Rollout', 'How releases go out', 'Fridays are for deploying and for deployed things.'));
+    put('brakes', page('Brakes', 'Car notes', 'Everything stops here, nothing else.'));
+    assert.deepEqual(w.search('deploy').map((h) => h.slug), ['rollout']);
+    assert.deepEqual(w.search('deploys').map((h) => h.slug), ['rollout']);
+    assert.deepEqual(w.search('ops'), [], 'ops is not inside stops');
+  });
+
+  test('search: FTS syntax in a query is just words', () => {
+    const w = new Wiki(dir);
+    put('a', page('Alpha', 'first', 'plain body text about nothing'));
+    put('b', page('Beta', 'second', 'foo and x live here'));
+    for (const q of ['foo" OR body:* NEAR(', 'title:x', '*', '"', 'NEAR(a b)', 'a OR b', '-foo']) {
+      let hits: { slug: string }[] = [];
+      assert.doesNotThrow(() => (hits = w.search(q)), q);
+      assert.ok(hits.length < 2, `${q} must not match everything`);
+    }
+    assert.deepEqual(w.search('foo" OR body:* NEAR('), [], 'three plain words (foo, body, near), none with two body hits');
+    assert.deepEqual(w.search('foo" OR *').map((h) => h.slug), ['b'], 'only the word foo counts');
+    assert.deepEqual(w.search('title:x'), [], 'x is too short; title is not a column filter');
+  });
+
+  test('search: edits on disk, deletions and saves show up in the next search', async () => {
+    const w = new Wiki(dir);
+    put('a', page('Alpha', 'first', 'zebras graze'));
+    assert.deepEqual(w.search('zebras').map((h) => h.slug), ['a']);
+    put('a', page('Alpha', 'first', 'giraffes graze'));
+    const f = join(dir, 'pages', 'a.md');
+    utimesSync(f, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+    assert.deepEqual(w.search('zebras'), []);
+    assert.deepEqual(w.search('giraffes').map((h) => h.slug), ['a']);
+    put('b', page('Beta', 'second', 'giraffes too'));
+    assert.deepEqual(w.search('giraffes').map((h) => h.slug), ['a', 'b']);
+    rmSync(join(dir, 'pages', 'b.md'));
+    assert.deepEqual(w.search('giraffes').map((h) => h.slug), ['a']);
+    await w.save({ slug: 'c', content: page('Gamma', 'third', 'okapis wander'), message: 'add', agent: 'x' });
+    assert.deepEqual(w.search('okapis').map((h) => h.slug), ['c']);
+    const v = w.page('c')!.version;
+    await w.save({ slug: 'c', content: page('Gamma', 'third', 'tapirs wander'), message: 'edit', agent: 'x', version: v });
+    assert.deepEqual(w.search('okapis'), []);
+    const hit = w.search('tapirs')[0];
+    assert.equal(hit.slug, 'c');
+    assert.match(hit.updated, /^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  test('search: the snippet comes from FTS5 around the matched body words', () => {
+    const w = new Wiki(dir);
+    put('long', page('Long', 'filler', `${'alpha '.repeat(60)} quokka lives ${'omega '.repeat(60)}`));
+    put('meta', page('Quokka', 'only metadata', 'nothing here'));
+    const [first, second] = w.search('quokka');
+    assert.equal(first.slug, 'meta');
+    assert.equal(second.slug, 'long');
+    assert.match(second.snippet, /^… .*quokka lives.* …$/);
+    assert.ok(!/\s{2}/.test(second.snippet));
+    assert.equal(first.snippet, '', 'metadata-only hit has no body snippet');
+  });
+
   test('backlinks', () => {
     const w = new Wiki(dir);
     put('a', page('A', 'a', 'see [[b]] and [[a]]'));
