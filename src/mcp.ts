@@ -6,7 +6,7 @@ import * as z from 'zod';
 import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 export const BOARD_URI = 'ui://agent-team-up/board.html';
 const WAIT_DEFAULT = 45;
 const WAIT_MAX = 55;

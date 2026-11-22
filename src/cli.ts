@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createHub } from './http.ts';
 import { VERSION } from './mcp.ts';
-import { defaultLogs, defaultWorktrees, parseDuration, runLoop } from './runner.ts';
+import { defaultLogs, defaultWorktrees, killActiveGroups, parseDuration, runLoop } from './runner.ts';
 import { Store, TeamError } from './store.ts';
 import { ago } from './view.ts';
 
@@ -22,7 +22,7 @@ Usage:
   agent-team-up owner-key                     Make a new owner key (signs out every board).
   agent-team-up serve [--port 7600] [--host 127.0.0.1] [--allowed-host name]...
   agent-team-up run <agent> [--hub url] [--key-file path] [--poll s] [--timeout 30m]
-                    [--worktrees dir] [--logs dir] -- <command> [args...]
+                    [--worktrees dir] [--logs dir] [--prompt-stdin] -- <command> [args...]
                                             Run a headless agent on tasks aimed at <agent>; {prompt} is replaced.
 
 Options:
@@ -63,7 +63,7 @@ function output(key: string, keyFile: string | undefined, label: string, extra: 
 
 async function runCommand(
   [agent, ...command]: string[],
-  v: { hub?: string; poll: string; timeout: string; worktrees?: string; logs?: string; 'key-file'?: string },
+  v: { 'prompt-stdin'?: boolean; hub?: string; poll: string; timeout: string; worktrees?: string; logs?: string; 'key-file'?: string },
 ): Promise<void> {
   if (!agent || !command.length) fail('Usage: agent-team-up run <agent> [options] -- <command> [args...]');
   const keyFile = v['key-file'];
@@ -83,8 +83,19 @@ async function runCommand(
   const stop = () => ac.abort();
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  process.on('SIGHUP', stop);
+  process.on('exit', killActiveGroups);
+  process.on('uncaughtException', (err) => {
+    killActiveGroups();
+    console.error(err);
+    process.exit(1);
+  });
   log(`runner started: agent ${agent}, hub ${hub}`);
-  await runLoop({ agent, hub, key, command, pollMs: poll * 1000, timeoutMs, worktrees: v.worktrees ?? defaultWorktrees(), logs: v.logs ?? defaultLogs(), signal: ac.signal, log });
+  try {
+    await runLoop({ agent, hub, key, command, promptStdin: v['prompt-stdin'], pollMs: poll * 1000, timeoutMs, worktrees: v.worktrees ?? defaultWorktrees(), logs: v.logs ?? defaultLogs(), signal: ac.signal, log });
+  } catch (err) {
+    return fail((err as Error).message);
+  }
   log('runner stopped');
   process.exit(0);
 }
@@ -102,6 +113,7 @@ export async function main(argv: string[]): Promise<void> {
       url: { type: 'string' },
       'key-file': { type: 'string' },
       hub: { type: 'string' },
+      'prompt-stdin': { type: 'boolean' },
       poll: { type: 'string', default: '15' },
       timeout: { type: 'string', default: '30m' },
       worktrees: { type: 'string' },

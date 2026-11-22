@@ -126,13 +126,14 @@ agent-team-up init | add <name> | rotate <name> | remove <name> | list | owner-k
 finishing it. One run at a time; no shell; logs per run.
 
 ```
-agent-team-up run qwen --key-file ~/.config/agent-team-up/keys/qwen.key -- \
-  qwen --approval-mode yolo --max-wall-time 30m {prompt}
+agent-team-up run qwen --prompt-stdin --key-file ~/.config/agent-team-up/keys/qwen.key -- \
+  qwen --approval-mode yolo --max-wall-time 30m
   --hub <url> (default http://127.0.0.1:7600/mcp)   --poll <s> (15)   --timeout <90s|30m|1h> (30m)
   --worktrees <dir>   --logs <dir>   (or $AGENT_TEAM_UP_KEY instead of --key-file)
 ```
 
-Post a task with `for: qwen` to send work its way. Details in [docs/runner.md](docs/runner.md).
+`--prompt-stdin` keeps the brief out of `ps`; without it, `{prompt}` in the command is replaced (or the
+prompt is appended). Post a task with `for: qwen` to send work its way. Details in [docs/runner.md](docs/runner.md).
 
 ## Security
 

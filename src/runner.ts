@@ -1,7 +1,7 @@
 // The runner: claims tasks aimed at one agent and runs a headless CLI for each. See docs/runner.md.
 
 import { execFile, spawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -14,12 +14,16 @@ export interface RunnerOptions {
   key: string;
   /** The command and its arguments; `{prompt}` is replaced, else the prompt is appended. */
   command: string[];
+  /** Send the prompt on the child's stdin instead of argv (so `ps` doesn't show the brief). */
+  promptStdin?: boolean;
   worktrees: string;
   logs: string;
   pollMs?: number;
   timeoutMs?: number;
   /** How long after SIGTERM before SIGKILL. */
   killGraceMs?: number;
+  /** Oldest hub version the runner accepts (tests only; default MIN_HUB_VERSION). */
+  minHubVersion?: string;
   /** Aborting stops the current run like a timeout and marks its task blocked. */
   signal?: AbortSignal;
   log?: (line: string) => void;
@@ -38,6 +42,11 @@ export interface RunResult {
   cwd?: string;
 }
 
+/** A problem retrying won't fix: the runner stops and the CLI exits nonzero. */
+export class RunnerFatal extends Error {}
+/** The hub answered, but with a tool error. */
+class HubError extends Error {}
+
 interface TaskData {
   id: number;
   title: string;
@@ -49,6 +58,7 @@ interface TaskData {
   state: string;
 }
 
+export const MIN_HUB_VERSION = '0.2.0';
 const DEFAULT_POLL_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_KILL_GRACE_MS = 10_000;
@@ -56,6 +66,18 @@ const MAX_BACKOFF_MS = 120_000;
 
 export const defaultWorktrees = (): string => join(homedir(), '.local', 'share', 'agent-team-up', 'worktrees');
 export const defaultLogs = (): string => join(homedir(), '.local', 'state', 'agent-team-up', 'runs');
+
+/** Process groups of running children, so the CLI can kill them on a crash. */
+const activeGroups = new Set<number>();
+export function killActiveGroups(): void {
+  for (const pid of activeGroups) {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // gone
+    }
+  }
+}
 
 /** "90", "90s", "30m", "1h" -> milliseconds. */
 export function parseDuration(s: string): number {
@@ -70,20 +92,37 @@ function showDuration(ms: number): string {
   return `${+(ms / 1000).toFixed(2)}s`;
 }
 
-async function withClient<T>(o: RunnerOptions, fn: (c: Client) => Promise<T>): Promise<T> {
+function olderThan(version: string, min: string): boolean {
+  const a = version.split('.').map((x) => parseInt(x, 10) || 0);
+  const b = min.split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
+  return false;
+}
+
+function checkOptions(o: RunnerOptions): void {
+  if (o.promptStdin && o.command.some((a) => a.includes('{prompt}'))) throw new RunnerFatal('--prompt-stdin and {prompt} in the command are mutually exclusive.');
+}
+
+async function withClient<T>(o: RunnerOptions, fn: (c: Client) => Promise<T>, check = true): Promise<T> {
   const client = new Client({ name: `runner-${o.agent}`, version: '0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(o.hub), { requestInit: { headers: { authorization: `Bearer ${o.key}` } } }));
   try {
+    if (check) {
+      const v = client.getServerVersion()?.version ?? '0';
+      const min = o.minHubVersion ?? MIN_HUB_VERSION;
+      if (olderThan(v, min)) throw new RunnerFatal(`the hub is version ${v}; the runner needs ${min} or newer (claim mine_only). Update the hub.`);
+    }
     return await fn(client);
   } finally {
     await client.close().catch(() => {});
   }
 }
 
-async function tool(c: Client, name: string, args: Record<string, unknown>): Promise<TaskData | undefined> {
+async function tool(c: Client, name: string, args: Record<string, unknown>) {
   const r = await c.callTool({ name, arguments: args });
-  if (r.isError) throw new Error(((r.content as { text?: string }[])[0]?.text ?? 'tool error').slice(0, 300));
-  return (r.structuredContent as { task?: TaskData } | undefined)?.task;
+  const text = ((r.content as { text?: string }[] | undefined) ?? []).map((x) => x.text ?? '').join('\n');
+  if (r.isError) throw new HubError(text.slice(0, 300) || 'tool error');
+  return { text, task: (r.structuredContent as { task?: TaskData } | undefined)?.task };
 }
 
 function git(args: string[]): Promise<string> {
@@ -112,10 +151,10 @@ function buildPrompt(agent: string, t: TaskData, cwd: string, branch: string | u
   ].join('\n');
 }
 
-/** Makes the directory the agent works in. Returns the branch when it is a git worktree. */
+/** Makes the directory the agent works in (reusing it on a re-run). Returns the branch for a git worktree. */
 async function setupWorkdir(o: RunnerOptions, t: TaskData): Promise<{ cwd: string; branch?: string }> {
   const m = /^Repo:[ \t]*(.+?)[ \t]*$/m.exec(t.brief);
-  mkdirSync(o.worktrees, { recursive: true });
+  mkdirSync(o.worktrees, { recursive: true, mode: 0o700 });
   if (!m) {
     const cwd = join(o.worktrees, `task-${t.id}`);
     mkdirSync(cwd, { recursive: true });
@@ -124,10 +163,21 @@ async function setupWorkdir(o: RunnerOptions, t: TaskData): Promise<{ cwd: strin
   const raw = m[1];
   const repo = resolve(raw === '~' ? homedir() : raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw);
   await git(['-C', repo, 'rev-parse', '--git-dir']);
-  const base = await git(['-C', repo, 'rev-parse', '--verify', '--quiet', 'origin/HEAD']).then(() => 'origin/HEAD', () => 'HEAD');
   const branch = `${o.agent}/task-${t.id}`;
   const cwd = join(o.worktrees, `${basename(repo)}-task-${t.id}`);
-  await git(['-C', repo, 'worktree', 'add', '-b', branch, cwd, base]);
+  if (existsSync(cwd)) {
+    const cur = await git(['-C', cwd, 'branch', '--show-current']).catch(() => '');
+    if (cur === branch) return { cwd, branch };
+    throw new Error(`${cwd} exists but is not on ${branch}`);
+  }
+  await git(['-C', repo, 'worktree', 'prune']).catch(() => '');
+  const hasBranch = await git(['-C', repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false);
+  if (hasBranch) {
+    await git(['-C', repo, 'worktree', 'add', cwd, branch]);
+  } else {
+    const base = await git(['-C', repo, 'rev-parse', '--verify', '--quiet', 'origin/HEAD']).then(() => 'origin/HEAD', () => 'HEAD');
+    await git(['-C', repo, 'worktree', 'add', '-b', branch, cwd, base]);
+  }
   return { cwd, branch };
 }
 
@@ -139,31 +189,48 @@ interface Exit {
   error?: string;
 }
 
+const nap = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 function runCommand(o: RunnerOptions, argv: string[], cwd: string, logPath: string, prompt: string): Promise<Exit> {
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const grace = o.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
-  mkdirSync(o.logs, { recursive: true });
-  const fd = openSync(logPath, 'w', 0o600);
-  writeSync(fd, `# prompt\n${prompt}\n\n# output\n`);
+  mkdirSync(o.logs, { recursive: true, mode: 0o700 });
+  const fd = openSync(logPath, 'a', 0o600);
+  try {
+    fchmodSync(fd, 0o600);
+    writeSync(fd, `\n# run ${new Date().toISOString()}\n# prompt\n${prompt}\n\n# output\n`);
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
   return new Promise((res) => {
     const out: Exit = { code: null, signal: null, timedOut: false, stopped: false };
-    let timers: NodeJS.Timeout[] = [];
+    const timers: NodeJS.Timeout[] = [];
     let child;
-    let finished = false;
-    // A spawn failure can emit both 'error' and 'close'; settle once.
-    const finish = () => {
-      if (finished) return;
-      finished = true;
+    let pid: number | undefined;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
       timers.forEach(clearTimeout);
       o.signal?.removeEventListener('abort', onAbort);
+      if (pid) activeGroups.delete(pid);
       closeSync(fd);
       res(out);
     };
     const killGroup = (sig: NodeJS.Signals) => {
       try {
-        process.kill(-child!.pid!, sig);
+        process.kill(-pid!, sig);
       } catch {
         // already gone
+      }
+    };
+    const alive = () => {
+      try {
+        process.kill(-pid!, 0);
+        return true;
+      } catch {
+        return false;
       }
     };
     const stop = () => {
@@ -174,20 +241,36 @@ function runCommand(o: RunnerOptions, argv: string[], cwd: string, logPath: stri
       out.stopped = true;
       stop();
     };
+    // The leader is gone: anything it left in the group gets SIGTERM, then SIGKILL after the grace.
+    const reap = async () => {
+      if (alive()) {
+        killGroup('SIGTERM');
+        const end = Date.now() + grace;
+        while (alive() && Date.now() < end) await nap(25);
+        if (alive()) killGroup('SIGKILL');
+      }
+      settle();
+    };
     try {
-      child = spawn(argv[0], argv.slice(1), { cwd, stdio: ['ignore', fd, fd], detached: true, shell: false });
+      child = spawn(argv[0], argv.slice(1), { cwd, stdio: [o.promptStdin ? 'pipe' : 'ignore', fd, fd], detached: true, shell: false });
     } catch (err) {
       out.error = (err as Error).message;
-      return finish();
+      return settle();
+    }
+    pid = child.pid;
+    if (pid) activeGroups.add(pid);
+    if (o.promptStdin) {
+      child.stdin!.on('error', () => {});
+      child.stdin!.end(prompt);
     }
     child.on('error', (err) => {
       out.error = err.message;
-      finish();
+      settle();
     });
     child.on('close', (code, signal) => {
       out.code = code;
       out.signal = signal;
-      finish();
+      void reap();
     });
     timers.push(setTimeout(() => {
       out.timedOut = true;
@@ -196,48 +279,6 @@ function runCommand(o: RunnerOptions, argv: string[], cwd: string, logPath: stri
     if (o.signal?.aborted) onAbort();
     else o.signal?.addEventListener('abort', onAbort, { once: true });
   });
-}
-
-/** Claims at most one task aimed at the agent and runs it. Undefined when nothing was waiting. */
-export async function runOnce(o: RunnerOptions): Promise<RunResult | undefined> {
-  const log = o.log ?? (() => {});
-  const t = await withClient(o, (c) => tool(c, 'claim', { mine_only: true }));
-  if (!t) return undefined;
-  log(`claimed #${t.id}`);
-
-  const markBlocked = async (note: string, links: string): Promise<string> => {
-    await withClient(o, (c) => tool(c, 'update', { task: t.id, state: 'blocked', note: clip(note, 3900), links: clip(links, 900) }));
-    return 'blocked';
-  };
-
-  let work: { cwd: string; branch?: string };
-  try {
-    work = await setupWorkdir(o, t);
-  } catch (err) {
-    const msg = clip((err as Error).message);
-    log(`#${t.id} setup failed: ${msg}`);
-    await markBlocked(`couldn't set up a workspace: ${msg}`, '');
-    return { task: t.id, outcome: 'setup-failed', exitCode: null, timedOut: false, stopped: false, state: 'blocked' };
-  }
-
-  const logPath = join(o.logs, `${o.agent}-task-${t.id}.log`);
-  const prompt = buildPrompt(o.agent, t, work.cwd, work.branch);
-  const argv = o.command.some((a) => a.includes('{prompt}')) ? o.command.map((a) => a.replaceAll('{prompt}', () => prompt)) : [...o.command, prompt];
-  log(`#${t.id} run started (cwd ${work.cwd}, log ${logPath})`);
-  const exit = await runCommand(o, argv, work.cwd, logPath, prompt);
-
-  const after = await withClient(o, (c) => tool(c, 'task', { task: t.id }));
-  let state = after?.state ?? 'unknown';
-  const how = exit.stopped ? 'runner stopped' : exit.timedOut ? `timed out after ${showDuration(o.timeoutMs ?? DEFAULT_TIMEOUT_MS)}` : exit.error ? `failed to start: ${clip(exit.error, 120)}` : `exit ${exit.code ?? exit.signal}`;
-  const stillMine = after !== undefined && after.claimed_by === o.agent && after.state === 'working';
-  let outcome: RunResult['outcome'] = 'finished';
-  if (stillMine) {
-    const note = exit.stopped ? 'runner stopped' : `run ended without finishing (${how}). Log: ${logPath}`;
-    state = await markBlocked(note, work.cwd);
-    outcome = 'blocked';
-  }
-  log(`#${t.id} run ended (${how}); task is ${state}`);
-  return { task: t.id, outcome, exitCode: exit.code, timedOut: exit.timedOut, stopped: exit.stopped, state, log: logPath, cwd: work.cwd };
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -253,20 +294,175 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Repeats runOnce until `signal` aborts. Errors (hub down) are logged and retried with backoff. */
+const backoff = (o: RunnerOptions, fails: number) => Math.min(MAX_BACKOFF_MS, (o.pollMs ?? DEFAULT_POLL_MS) * 2 ** Math.min(fails, 10));
+
+/** Retries `fn` with backoff until it works. Once the runner is stopped it makes one last attempt. */
+async function persist<T>(o: RunnerOptions, what: string, fn: () => Promise<T>): Promise<T | undefined> {
+  const log = o.log ?? (() => {});
+  let final = false;
+  for (let fails = 0; ; ) {
+    try {
+      return await fn();
+    } catch (err) {
+      log(`error ${what}: ${clip((err as Error).message, 200)}`);
+      if (final) {
+        log(`gave up ${what}`);
+        return undefined;
+      }
+      if (o.signal?.aborted) {
+        final = true;
+        continue;
+      }
+      fails++;
+      await sleep(backoff(o, fails), o.signal);
+    }
+  }
+}
+
+/** Takes the next task aimed at this agent. A lost reply is recovered from the hub's view of what I hold. */
+async function claimTask(o: RunnerOptions): Promise<TaskData | undefined> {
+  try {
+    const r = await withClient(o, (c) => tool(c, 'claim', { mine_only: true }));
+    if (r.task) return r.task;
+    if (/^You have #/.test(r.text)) throw new Error('the hub handed out a task without structured data');
+    return undefined;
+  } catch (err) {
+    if (err instanceof RunnerFatal || err instanceof HubError) throw err;
+    // The claim may have gone through with the reply lost. Look for a task I hold in `working`.
+    const held = await withClient(
+      o,
+      async (c) => {
+        const team = (await tool(c, 'team', {})).text;
+        const id = /^- #(\d+) \[working, you\]/m.exec(team)?.[1];
+        return id ? (await tool(c, 'task', { task: Number(id) })).task : undefined;
+      },
+      false,
+    ).catch(() => undefined);
+    if (!held) throw err;
+    (o.log ?? (() => {}))(`claim reply lost; continuing with #${held.id}, which I hold`);
+    return held;
+  }
+}
+
+async function release(o: RunnerOptions, id: number): Promise<void> {
+  await persist(o, `releasing #${id}`, () => withClient(o, (c) => tool(c, 'update', { task: id, state: 'open' }), false));
+}
+
+/** Claims at most one task aimed at the agent and runs it. Undefined when nothing was waiting. */
+export async function runOnce(o: RunnerOptions): Promise<RunResult | undefined> {
+  checkOptions(o);
+  const log = o.log ?? (() => {});
+  const t = await claimTask(o);
+  if (!t) return undefined;
+  log(`claimed #${t.id}`);
+
+  if (t.claimed_by !== o.agent) {
+    await release(o, t.id);
+    throw new RunnerFatal(`the key belongs to ${t.claimed_by}, not ${o.agent}. Released #${t.id}; stopping.`);
+  }
+  if (o.signal?.aborted) {
+    await release(o, t.id);
+    log(`#${t.id} released: runner stopped`);
+    return undefined;
+  }
+
+  let work: { cwd: string; branch?: string } | undefined;
+  let exit: Exit | undefined;
+  let setupError: string | undefined;
+  let startError: string | undefined;
+  const logPath = join(o.logs, `${o.agent}-task-${t.id}.log`);
+  const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let result: RunResult | undefined;
+  try {
+    try {
+      work = await setupWorkdir(o, t);
+    } catch (err) {
+      setupError = clip((err as Error).message);
+      log(`#${t.id} setup failed: ${setupError}`);
+    }
+    if (work && !o.signal?.aborted) {
+      const prompt = buildPrompt(o.agent, t, work.cwd, work.branch);
+      const argv = o.promptStdin ? o.command : o.command.some((a) => a.includes('{prompt}')) ? o.command.map((a) => a.replaceAll('{prompt}', () => prompt)) : [...o.command, prompt];
+      log(`#${t.id} run started (cwd ${work.cwd}, log ${logPath})`);
+      try {
+        exit = await runCommand(o, argv, work.cwd, logPath, prompt);
+      } catch (err) {
+        startError = clip((err as Error).message);
+        log(`#${t.id} couldn't start the run: ${startError}`);
+      }
+    } else if (work) {
+      exit = { code: null, signal: null, timedOut: false, stopped: true };
+    }
+  } finally {
+    // Whatever happened above, the task must not stay `working` because of this run.
+    const how = setupError
+      ? `couldn't set up a workspace: ${setupError}`
+      : startError
+        ? `couldn't start the run: ${startError}`
+        : exit?.stopped
+          ? 'runner stopped'
+          : exit?.timedOut
+            ? `timed out after ${showDuration(timeoutMs)}`
+            : exit?.error
+              ? `failed to start: ${clip(exit.error, 120)}`
+              : `exit ${exit?.code ?? exit?.signal}`;
+    const settled = await persist(o, `finishing #${t.id}`, () =>
+      withClient(
+        o,
+        async (c) => {
+          const after = (await tool(c, 'task', { task: t.id })).task;
+          if (after && after.claimed_by === o.agent && after.state === 'working') {
+            const note = setupError || startError ? how : exit?.stopped ? 'runner stopped' : `run ended without finishing (${how}). Log: ${logPath}`;
+            await tool(c, 'update', { task: t.id, state: 'blocked', note: clip(note, 3900), links: clip(work?.cwd ?? '', 900) });
+            return { state: 'blocked', blocked: true };
+          }
+          return { state: after?.state ?? 'unknown', blocked: false };
+        },
+        false,
+      ),
+    );
+    const state = settled?.state ?? 'unknown';
+    log(`#${t.id} run ended (${how}); task is ${state}`);
+    result = {
+      task: t.id,
+      outcome: setupError ? 'setup-failed' : settled?.blocked ? 'blocked' : 'finished',
+      exitCode: exit?.code ?? null,
+      timedOut: exit?.timedOut ?? false,
+      stopped: exit?.stopped ?? false,
+      state,
+      log: exit ? logPath : undefined,
+      cwd: work?.cwd,
+    };
+  }
+  return result;
+}
+
+/** Repeats runOnce until `signal` aborts. Hub errors are retried with backoff; a RunnerFatal ends the loop. */
 export async function runLoop(o: RunnerOptions): Promise<void> {
+  checkOptions(o);
   const log = o.log ?? (() => {});
   const poll = o.pollMs ?? DEFAULT_POLL_MS;
   let fails = 0;
+  let checked = false;
   while (!o.signal?.aborted) {
     try {
+      if (!checked) {
+        // Version, and that the key is the agent's: `team` opens with "You are <name>."
+        const who = await withClient(o, async (c) => /^You are (\S+?)\./.exec((await tool(c, 'team', {})).text)?.[1]);
+        if (who && who !== o.agent) throw new RunnerFatal(`the key belongs to ${who}, not ${o.agent}.`);
+        checked = true;
+      }
       const r = await runOnce(o);
       fails = 0;
       if (r) continue;
       await sleep(poll, o.signal);
     } catch (err) {
+      if (err instanceof RunnerFatal) {
+        log(`fatal: ${err.message}`);
+        throw err;
+      }
       fails++;
-      const wait = Math.min(MAX_BACKOFF_MS, poll * 2 ** Math.min(fails, 10));
+      const wait = backoff(o, fails);
       log(`error: ${clip((err as Error).message, 200)}; retrying in ${Math.round(wait / 1000)}s`);
       await sleep(wait, o.signal);
     }
