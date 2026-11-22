@@ -149,7 +149,11 @@ function runCommand(o: RunnerOptions, argv: string[], cwd: string, logPath: stri
     const out: Exit = { code: null, signal: null, timedOut: false, stopped: false };
     let timers: NodeJS.Timeout[] = [];
     let child;
+    let finished = false;
+    // A spawn failure can emit both 'error' and 'close'; settle once.
     const finish = () => {
+      if (finished) return;
+      finished = true;
       timers.forEach(clearTimeout);
       o.signal?.removeEventListener('abort', onAbort);
       closeSync(fd);
