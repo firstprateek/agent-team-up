@@ -153,7 +153,7 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
   function safeUrl(u) {
     try { const x = new URL(u); return x.protocol === 'http:' || x.protocol === 'https:' ? x.href : null; } catch (e) { return null; }
   }
-  const INLINE = /`([^`]+)`|\[\[([a-z0-9][a-z0-9-]*)\]\]|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|(?<![\w])_([^_]+)_(?![\w])/g;
+  const INLINE = /`([^`]+)`|\[\[([a-z0-9][a-z0-9-]*)\]\]|\[([^\[\]]{1,500})\]\(([^)\s]{1,2000})\)|\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|(?<![\w])_([^_]+)_(?![\w])/g;
   function inline(text) {
     const out = [];
     let last = 0;

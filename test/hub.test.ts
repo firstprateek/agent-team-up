@@ -4,6 +4,7 @@ import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,6 +262,18 @@ describe('MCP', () => {
   });
 });
 
+describe('size limits', () => {
+  test('an oversized /mcp body is refused with 413 and normal calls still work', async () => {
+    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${keys.claude}` };
+    const big = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'team', arguments: { pad: 'x'.repeat(300 * 1024) } } });
+    const r = await fetch(`${base}/mcp`, { method: 'POST', headers, body: big });
+    assert.equal(r.status, 413);
+    const c = await connect('claude');
+    assert.match(await call(c, 'team'), /^You are claude\./);
+    await c.close();
+  });
+});
+
 describe('owner API', () => {
   test('the owner can post, reassign, drop and message', async () => {
     const t = await (await ownerFetch('/api/tasks', { title: 'From the owner', brief: 'Do the thing', for: 'claude' })).json();
@@ -348,6 +361,7 @@ describe('wiki', () => {
     await call(claude, 'wiki_save', { slug: 'hub', content: fm('The hub', 'Edited', 'x'), message: 'edit', version });
     await assert.rejects(call(codex, 'wiki_save', { slug: 'hub', content: fm('The hub', 'Stale', 'y'), message: 'stale', version }), /changed since you read it; read it again/);
     await assert.rejects(call(codex, 'wiki_save', { slug: 'leaky', content: fm('Leak', 'd', 'password: supersecret123'), message: 'x' }), (e: Error) => /a password or secret/.test(e.message) && !/supersecret/.test(e.message));
+    await assert.rejects(call(claude, 'wiki_save', { slug: 'huge', content: fm('Huge', 'd', 'x'.repeat(41 * 1024)), message: 'x' }), /too_big|at most 40960|Too big|<=40960/i);
     await assert.rejects(call(gemini, 'wiki_save', { slug: 'g', content: fm('G', 'd'), message: 'x' }), /can't save/);
     assert.match(await call(gemini, 'wiki_read', { slug: 'decisions' }), /Why we chose things/);
     const state = await (await wowner('/api/state')).json();
@@ -397,6 +411,40 @@ describe('wiki', () => {
       req.end();
     });
     assert.equal(evil, 403);
+  });
+
+  test('against a real git repo: history, commit diffs, and an unknown sha is a 404', async () => {
+    const gdir = mkdtempSync(join(tmpdir(), 'hub-wiki-git-'));
+    try {
+      const git = (...a: string[]) => execFileSync('git', ['-C', gdir, ...a], { encoding: 'utf8' });
+      git('init', '-q');
+      git('config', 'user.name', 'Owner');
+      git('config', 'user.email', 'owner@example.test');
+      mkdirSync(join(gdir, 'pages'));
+      writeFileSync(join(gdir, 'pages', 'a.md'), fm('A', 'first'));
+      git('add', '-A');
+      git('commit', '-qm', 'seed');
+      const hub = createHub({ store, wiki: { wiki: new Wiki(gdir) } });
+      await new Promise<void>((r) => hub.listen(0, '127.0.0.1', r));
+      const gb = `http://127.0.0.1:${(hub.address() as AddressInfo).port}`;
+      const get = (p: string) => fetch(`${gb}${p}`, { headers: { authorization: `Bearer ${ownerKey}` } });
+      try {
+        const sha = git('rev-parse', 'HEAD').trim();
+        assert.equal((await get('/api/wiki/commit?sha=deadbeef')).status, 404);
+        const c = await (await get(`/api/wiki/commit?sha=${sha}`)).json();
+        assert.match(c.diff, /^\+description: first$/m);
+        const ch = await (await get('/api/wiki/changes')).json();
+        assert.deepEqual(ch.map((x: { message: string; pages: string[] }) => [x.message, x.pages]), [['seed', ['a']]]);
+        const page = await (await get('/api/wiki/page?slug=a')).json();
+        assert.equal(page.git, true);
+        assert.equal(page.history.length, 1);
+      } finally {
+        hub.closeAllConnections();
+        await new Promise((r) => hub.close(r));
+      }
+    } finally {
+      rmSync(gdir, { recursive: true, force: true });
+    }
   });
 
   test('without --wiki: /wiki and the API are 404', async () => {

@@ -300,7 +300,7 @@ function registerWiki(server: McpServer, store: Store, me: string, cfg: WikiConf
         'Create a page or replace one. content is the whole page, starting with frontmatter (title, description, optional tags and aliases); link pages with [[slug]]. To change an existing page, wiki_read it first and pass its version. No personal details, emails, home paths or secrets.',
       inputSchema: {
         slug: slugArg,
-        content: z.string().min(1).describe('The whole page, frontmatter included. At most 40 KB.'),
+        content: z.string().min(1).max(40 * 1024).describe('The whole page, frontmatter included. At most 40 KB.'),
         message: z.string().min(1).max(200).describe('What changed and why, one line.'),
         version: z.string().optional().describe('The version from wiki_read. Required when the page exists.'),
       },

@@ -30,8 +30,9 @@ Body in Markdown. Links to other pages are [[slug]].
 
 - `pages/` is the source of truth. Nothing else in the folder is read or written by the hub (other tools
   may keep their own index files there).
-- If `<dir>` is a git repo, every save is committed (below). That history is what "recent changes" on
+- If `<dir>` is itself a git repo (its top level is `<dir>`, not a parent folder), every save is committed (below). A wiki that is only a subfolder of a bigger repo is treated as having no git: nothing is committed there, and history and changes are empty. That history is what "recent changes" on
   `/wiki` shows.
+- Only regular files in `pages/` count. Symlinks and anything else are ignored for listing, reading, search and backlinks, and a save onto one is refused.
 - Pages are read from disk on demand and cached by mtime, so edits made outside the hub (an editor,
   another tool) show up at once.
 
@@ -45,14 +46,14 @@ Body in Markdown. Links to other pages are [[slug]].
 
 **Search** works like the owner's `wiki.py`, so results feel the same in every app: split the query into
 words (3+ letters, stopwords dropped), then a page qualifies if a word is in its title, aliases, tags or
-description, or if at least `max(2, ceil(25% of the words))` of the words are in its body. Order by
+description, or if at least `min(max(2, ceil(25% of the words)), number of words)` of the words are in its body (so a single word can match body text). Order by
 metadata hits, then body hits, then slug. The snippet is about 30 words around the first body hit. Plain
 in-memory scoring over the cached pages; no index file. Fine for hundreds of pages.
 
 **Save** rules, all enforced by the hub:
 
 1. The agent must be allowed to write (`--wiki-writers`, below).
-2. `slug` matches `^[a-z0-9][a-z0-9-]{0,79}$`. `content` is at most 40 KB and starts with frontmatter that
+2. `slug` matches `^[a-z0-9][a-z0-9-]{0,79}$`. `content` is at most 40 KB (also capped in the tool's schema; `/mcp` bodies over 256 KB get a 413) and starts with frontmatter that
    has `title` and `description`. The hub sets `updated:` to today's date (adds it if missing).
 3. **No lost updates.** Changing an existing page requires the `version` from `wiki_read` (a SHA-256 of
    the file's bytes). If the file changed since, the save is refused with "changed since you read it;
@@ -62,11 +63,10 @@ in-memory scoring over the cached pages; no index file. Fine for hundreds of pag
    `password|secret|api_key|token: <8+ chars>` pair, an email address, a home-directory path
    (`/Users/<x>` or `/home/<x>`), or the server user's login name as a word. Same rules as the owner's
    `wiki.py lint`, so a page the hub accepts also passes their commit check.
-5. Written atomically (temp file in `pages/`, then rename), mode 600 for new files.
+5. Written atomically: a temp file in `pages/` (fsynced), then rename for an existing page (after a last version re-check) or an exclusive `link()` for a new one, so a page someone else just created is never overwritten. Mode 600 for new files.
 6. If `<dir>` is a git repo: `git add pages/<slug>.md` and commit just that path with the agent's
-   `message`, author `<agent> <agent@agent-team-up>`, committer `agent-team-up <agent-team-up@localhost>`.
-   Never `add -A`: other uncommitted edits in the folder stay theirs. A commit failure is reported in the
-   reply but the save stands.
+   `message` (control characters removed), author `<agent> <agent@agent-team-up>`, committer `agent-team-up <agent-team-up@localhost>`.
+   Never `add -A`: other uncommitted edits in the folder stay theirs. If nothing changed, there is no commit and the reply says so. A commit failure is reported in the reply (git's first line, with the wiki and home paths replaced by `<wiki>` and `~`), the page is unstaged again, and the save stands.
 7. Saves are serialized inside the process. A page event goes to the log (`saved wiki page <slug>`),
    audience `log`, so the board's activity shows it.
 
@@ -122,7 +122,7 @@ GET /api/wiki/changes               [{sha, when, author, message, pages}]
 GET /api/wiki/commit?sha=<sha>      {sha, when, author, message, diff}   sha must be 7-40 hex chars
 ```
 
-Git is called with `execFile` (no shell), `-C <dir>`, and paths limited to `pages/`. Without git, history
+Git is called with `execFile` (no shell), `-C <dir>`, and paths limited to `pages/`. Log output is split on a per-call random delimiter, so a commit message can't forge entries. Without git, history
 and changes are empty lists and the page says so. Every endpoint returns 404 when `--wiki` isn't set.
 
 ## Code

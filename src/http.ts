@@ -22,6 +22,7 @@ export interface HubOptions {
 const LOOPBACK = ['localhost', '127.0.0.1', '[::1]', '::1'];
 const COOKIE = 'team_session';
 const MAX_BODY = 64 * 1024;
+const MAX_MCP_BODY = 256 * 1024;
 
 export function loadBoardHtml(): string {
   return readFileSync(new URL('./board.html', import.meta.url), 'utf8');
@@ -135,7 +136,13 @@ export function createHub({ store, allowedHosts = [], wiki: wikiCfg }: HubOption
     // A client that goes away must stop its wait before it reads (and so loses) the inbox.
     const abort = new AbortController();
     res.on('close', () => abort.abort());
-    const request = await toWebRequest(req, undefined, { signal: abort.signal });
+    let request: Request;
+    try {
+      request = await toWebRequest(req, undefined, { signal: abort.signal, maxRequestBodySize: MAX_MCP_BODY });
+    } catch (err) {
+      if ((err as { status?: number }).status === 413) return send(res, 413, { error: 'Request too large.' }, { connection: 'close' });
+      throw err;
+    }
     const response = await mcp.fetch(request, { authInfo: { token: key!, clientId: agent, scopes: [] } });
     const headers: Record<string, string> = {};
     response.headers.forEach((v, k) => { headers[k] = v; });
