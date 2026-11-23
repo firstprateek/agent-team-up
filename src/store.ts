@@ -474,18 +474,27 @@ export class Store {
     return this.task(id)!;
   }
 
+  /** An agent that claims or updates is evidently back: clear its resting status. */
+  private back(agent: string): void {
+    this.db.prepare("UPDATE agents SET status = 'available', resting_until = NULL, status_note = '' WHERE name = ? AND status = 'resting'").run(agent);
+  }
+
   /** Claims task `id`, or the best open task for `agent`. Returns undefined when there is nothing to take. */
   claim(agent: string, id?: number, opts: { mineOnly?: boolean } = {}): Task | undefined {
     const out = this.tx(() => {
+      this.back(agent);
       let t: Task | undefined;
       if (id !== undefined) {
         t = this.requireTask(id);
         if (t.claimed_by === agent && t.state !== 'done' && t.state !== 'dropped') return t;
         const why = this.paused(t);
         if (why) {
+          const g = t.goal_id !== null ? this.goal(t.goal_id) : undefined;
+          if (g && g.state !== 'open') throw new TeamError(`#${id} belongs to goal G${g.id}, which is ${g.state}.`);
           // Takeover: the note and links stay as the handover.
           const old = t.claimed_by!;
-          this.db.prepare("UPDATE tasks SET claimed_by = ?, updated_at = ? WHERE id = ? AND state = 'working' AND claimed_by = ?").run(agent, this.now(), t.id, old);
+          const r = this.db.prepare("UPDATE tasks SET claimed_by = ?, updated_at = ? WHERE id = ? AND state = 'working' AND claimed_by = ?").run(agent, this.now(), t.id, old);
+          if (Number(r.changes) !== 1) throw new TeamError(`#${id} changed while you were claiming it. Try again.`);
           const text = `took over #${t.id} "${t.title}" (paused: ${why}).`;
           this.log({ sender: agent, audience: old, kind: 'takeover', task_id: t.id, goal_id: t.goal_id, text });
           if (t.posted_by !== old && t.posted_by !== agent) {
@@ -537,6 +546,7 @@ export class Store {
       const holder = t.claimed_by === by;
       const poster = t.posted_by === by;
       if (!asOwner && !holder && !(poster && t.claimed_by === null)) {
+        // An approximation: after later handoffs or takeovers this may name someone who no longer matters.
         const took = this.db
           .prepare("SELECT sender FROM events WHERE kind = 'takeover' AND task_id = ? AND audience = ? ORDER BY id DESC LIMIT 1")
           .get(id, by) as { sender: string } | undefined;
@@ -547,6 +557,7 @@ export class Store {
             : `#${id} isn't yours. Claim it first.`,
         );
       }
+      this.back(by);
       const note = p.note?.trim();
       const links = p.links?.trim();
       const now = this.now();

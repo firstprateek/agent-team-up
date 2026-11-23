@@ -59,7 +59,8 @@ export function teamText(store: Store, me: string): string {
   const mine = tasks.filter((t) => t.claimed_by === me);
   const forMe = tasks.filter((t) => t.state === 'open' && t.claimed_by === null && t.for_agent === me);
   const open = tasks.filter((t) => t.state === 'open' && t.claimed_by === null && t.for_agent === null);
-  const others = tasks.filter((t) => t.state !== 'done' && t.state !== 'dropped' && !mine.includes(t) && !forMe.includes(t) && !open.includes(t));
+  const pausedOthers = new Set(tasks.filter((t) => t.claimed_by !== me && store.paused(t)));
+  const others = tasks.filter((t) => !pausedOthers.has(t) && t.state !== 'done' && t.state !== 'dropped' && !mine.includes(t) && !forMe.includes(t) && !open.includes(t));
   const section = (title: string, list: Task[], cap = Infinity) => {
     if (!list.length) return;
     lines.push('', title);
@@ -70,7 +71,7 @@ export function teamText(store: Store, me: string): string {
   section('Waiting for you:', forMe);
   section('Open for anyone:', open);
   section("Teammates' tasks:", others, 5);
-  const paused = tasks.map((t) => ({ t, why: store.paused(t) })).filter((x) => x.why && x.t.claimed_by !== me);
+  const paused = [...pausedOthers].map((t) => ({ t, why: store.paused(t) }));
   if (paused.length) {
     lines.push('', 'Paused:');
     for (const { t, why } of paused.slice(0, 5)) lines.push(`- #${t.id} "${clip(oneLine(t.title), 50)}" — paused (${why}). claim ${t.id} to take over.`);

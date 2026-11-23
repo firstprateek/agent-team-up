@@ -387,6 +387,62 @@ describe('paused task takeover', () => {
     assert.equal(s.update('codex', t.id, { note: 'mine now' }).note, 'mine now');
   });
 
+    test('resting with no end clears itself when the agent updates or claims', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    s.setStatus('gemini', 'resting', null, 'quota');
+    assert.ok(s.paused(s.task(t.id)!));
+    s.update('gemini', t.id, { note: 'still going' });
+    assert.equal(s.getAgent('gemini')!.status, 'available');
+    assert.equal(s.paused(s.task(t.id)!), null);
+    s.setStatus('gemini', 'resting', null, 'quota');
+    s.claim('gemini');
+    assert.equal(s.getAgent('gemini')!.status, 'available');
+  });
+
+  test('takeover respects a closed goal', () => {
+    const g = s.postGoal('Ship', '');
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b', goal: g.id });
+    s.claim('gemini', t.id);
+    s.setGoal(g.id, 'dropped');
+    now += 60 * MIN;
+    assert.throws(() => s.claim('codex', t.id), /goal G\d+, which is dropped/);
+    assert.equal(s.task(t.id)!.claimed_by, 'gemini');
+  });
+
+  test('a second takeover and a take-back work, and the poster hears when neither holder nor taker', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 60 * MIN;
+    for (const a of ['claude', 'gemini', 'codex']) s.takeInbox(a);
+    s.claim('codex', t.id);
+    assert.match(s.takeInbox('claude').events[0].text, /took over/, 'poster hears');
+    now += 60 * MIN;
+    s.claim('gemini', t.id); // the original holder takes it back
+    assert.equal(s.task(t.id)!.claimed_by, 'gemini');
+    assert.throws(() => s.update('codex', t.id, { note: 'x' }), /taken over by gemini/);
+    now += 60 * MIN;
+    s.claim('codex', t.id);
+    assert.equal(s.task(t.id)!.claimed_by, 'codex');
+    assert.throws(() => s.update('gemini', t.id, { note: 'x' }), /taken over by codex/);
+  });
+
+  test('claiming your own task again returns early with no event', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 60 * MIN;
+    const before = s.recentEvents(1)[0].id;
+    assert.equal(s.claim('gemini', t.id)!.claimed_by, 'gemini');
+    assert.equal(s.recentEvents(1)[0].id, before);
+  });
+
+  test('a paused task is listed once in team', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 60 * MIN;
+    assert.equal(teamText(s, 'codex').split('\n').filter((l) => l.startsWith(`- #${t.id} `)).length, 1);
+  });
+
   test('team lists paused tasks for everyone, capped at five', () => {
     for (let i = 0; i < 7; i++) {
       const t = s.postTask('claude', { title: `Task ${i}`, brief: 'b' });
