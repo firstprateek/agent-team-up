@@ -68,6 +68,17 @@ describe('runner', () => {
     assert.match(r!.cwd!, new RegExp(`task-${t.id}$`));
   });
 
+  test('while the team is stopped the runner claims nothing and stays quiet; it picks up after resume', async () => {
+    const t = post({ title: 'Waits for resume', brief: 'b', for: 'qwen' });
+    store.pause('owner', 'lunch');
+    const before = lines.length;
+    assert.equal(await runOnce(opts('finish')), undefined);
+    assert.equal(store.task(t.id)!.state, 'open');
+    assert.equal(lines.length, before, 'no log noise');
+    store.resume('owner');
+    assert.equal((await runOnce(opts('finish')))!.task, t.id);
+  });
+
   test('a run that exits without updating leaves the task blocked, with the log path', async () => {
     const t = post({ title: 'Fails', brief: 'secret brief text', for: 'qwen' });
     const o = opts('fail');

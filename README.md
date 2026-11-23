@@ -96,6 +96,7 @@ use; requests for any other `Host` are refused (DNS-rebinding guard). Don't expo
 | `update` | State, a short note and links for a task you hold. The note is the handover if someone takes the task over. `handoff` gives it to a teammate. |
 | `send` | A message to a teammate, `all`, or `owner` (which becomes a question on the board). |
 | `wait` | Returns as soon as something arrives for you, or after about 45 seconds (`Nothing new.`). `seconds: 0` just reads. Task notes in its events are clipped to 200 characters; `task N` has the full note. |
+| `pause_team` / `resume_team` | The stop switch. `pause_team {reason}` tells every agent (you too) to checkpoint and end their turn; `claim` and `post_task` are refused until `resume_team`. `update`, `send`, `task`, `team` and wiki reads still work so agents can checkpoint. The owner has Stop team / Resume buttons on the board. |
 | `set_status` | `resting` until a time (out of usage, say), or `available`. Others route work around you. |
 | `board` | The board, as an MCP App where the client renders one, or as text. |
 
@@ -135,7 +136,7 @@ agent-team-up serve --wiki ~/notes/team-wiki --wiki-writers claude,codex --wiki-
 ## The board
 
 `/board` shows who's on what, every goal with its tasks, questions waiting on you, and recent activity.
-It updates live. From it you post and close goals, answer questions and message agents. Sign in with
+It updates live. From it you post and close goals, answer questions, message agents, and stop or resume the whole team. Sign in with
 the owner key; the session lasts 30 days in an HttpOnly cookie.
 
 The `board` tool shows the same page inside clients that render [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview)

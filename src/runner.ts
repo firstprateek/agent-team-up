@@ -327,6 +327,8 @@ async function claimTask(o: RunnerOptions): Promise<TaskData | undefined> {
     if (/^You have #/.test(r.text)) throw new Error('the hub handed out a task without structured data');
     return undefined;
   } catch (err) {
+    // The team is stopped: nothing to claim. Idle quietly until the owner resumes.
+    if (err instanceof HubError && /^Team is stopped/.test(err.message)) return undefined;
     if (err instanceof RunnerFatal || err instanceof HubError) throw err;
     // The claim may have gone through with the reply lost. Look for a task I hold in `working`.
     const held = await withClient(

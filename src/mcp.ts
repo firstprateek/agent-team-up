@@ -7,7 +7,7 @@ import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
 import { SLUG, type Wiki } from './wiki.ts';
 
-export const VERSION = '0.6.0';
+export const VERSION = '0.7.0';
 export const BOARD_URI = 'ui://agent-team-up/board.html';
 const WAIT_DEFAULT = 45;
 const WAIT_MAX = 55;
@@ -21,7 +21,8 @@ const INSTRUCTIONS = `agent-team-up connects you to coding agents in other apps,
 4. To pass work on or ask for a review, update with handoff.
 5. Need the owner: send to "owner", carry on; the answer comes through wait.
 6. Idle: long-poll wait from a background process, not a loop of model turns, so waiting costs no tokens. wait with seconds:0 is a quick check.
-7. Checkpoint: after each meaningful step, push WIP and update your task's note (done / next) so a teammate can take over if you stop. Out of usage: set_status resting. A paused task (see team) can be taken over with claim <id>.`;
+7. Checkpoint: after each meaningful step, push WIP and update your task's note (done / next) so a teammate can take over if you stop. Out of usage: set_status resting. A paused task (see team) can be taken over with claim <id>.
+8. Owner says stop → pause_team, checkpoint, end turn. Resume only on the owner's word (resume_team).`;
 
 export interface WikiConfig {
   wiki: Wiki;
@@ -214,6 +215,31 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       const lines = events.map((e) => eventLine(e, me, now));
       if (more) lines.push(`…and ${more} more; wait again to read them.`);
       return text(lines.join('\n'));
+    }),
+  );
+
+  server.registerTool(
+    'pause_team',
+    {
+      title: 'Stop the whole team',
+      description: 'The owner said stop: stops every agent. Everyone, you included, is told to checkpoint and end their turn; claim and post_task are refused until resume_team. Then checkpoint and end your turn.',
+      inputSchema: { reason: z.string().min(1).max(300).describe('Why, in a few words.') },
+    },
+    guard((a: { reason: string }) => {
+      store.pause(me, a.reason);
+      return text('Team stopped. Checkpoint (push WIP, update your task note) and end your turn. Resume only on the owner\'s word.');
+    }),
+  );
+
+  server.registerTool(
+    'resume_team',
+    {
+      title: 'Resume the team',
+      description: 'Lifts a stop. Call it only when the owner has said to carry on.',
+    },
+    guard(() => {
+      store.resume(me);
+      return text('Team resumed. Call team and carry on.');
     }),
   );
 

@@ -1,6 +1,6 @@
 // Turns store state into the short text agents read and the JSON the board draws.
 
-import { type Agent, type Goal, type Question, type Store, type Task, type TeamEvent, clip } from './store.ts';
+import { type Agent, type Goal, type PauseState, type Question, type Store, type Task, type TeamEvent, clip } from './store.ts';
 
 const DAY = 86_400_000;
 
@@ -52,7 +52,10 @@ export function teamText(store: Store, me: string): string {
   const tasks = store.tasks();
   const questions = store.openQuestions();
   const unread = store.unread(me);
-  const lines: string[] = [`You are ${me}.`, '', 'Team:'];
+  const stop = store.pauseState();
+  const lines: string[] = [];
+  if (stop) lines.push(`STOPPED by ${stop.by} at ${new Date(stop.at).toTimeString().slice(0, 5)}: ${oneLine(stop.reason)}`);
+  lines.push(`You are ${me}.`, '', 'Team:');
   for (const a of agents) lines.push(agentLine(a, tasks, me, now));
   lines.push('', goals.length ? 'Goals:' : 'Goals: none yet. The owner posts them on the board.');
   for (const g of goals) lines.push(`- G${g.id} ${oneLine(g.title)}${g.detail ? ` — ${clip(g.detail, 80)}` : ''}`);
@@ -107,6 +110,7 @@ function indent(s: string): string {
 export function eventLine(e: TeamEvent, me: string, now: number): string {
   const when = now - e.at < DAY ? new Date(e.at).toTimeString().slice(0, 5) : new Date(e.at).toISOString().slice(0, 10);
   const from = e.sender === me ? 'you' : e.sender;
+  if (e.kind === 'pause' || e.kind === 'resume') return `[${when}] ${oneLine(e.text)}`;
   if (e.kind === 'message') {
     const to = e.audience === me ? 'you' : e.audience;
     return `[${when}] ${from} → ${to}${e.task_id !== null ? ` (#${e.task_id})` : ''}: ${oneLine(e.text)}`;
@@ -121,6 +125,7 @@ export interface BoardState {
   tasks: (Task & { paused?: string })[];
   questions: Question[];
   events: TeamEvent[];
+  stopped: PauseState | null;
 }
 
 /** The board's data. For an agent (`viewer`), direct messages and answers meant for others are left out. */
@@ -138,7 +143,7 @@ export function boardState(store: Store, viewer?: string): BoardState {
     .recentEvents(viewer ? 200 : 60)
     .filter((e) => !viewer || shared.has(e.audience) || e.audience === viewer || e.sender === viewer)
     .slice(-60);
-  return { now: store.now(), agents: store.agents(), goals, tasks, questions: store.openQuestions(), events };
+  return { now: store.now(), agents: store.agents(), goals, tasks, questions: store.openQuestions(), events, stopped: store.pauseState() };
 }
 
 /** A plain-text board for clients that don't render MCP Apps. */
@@ -156,6 +161,7 @@ export function boardText(s: BoardState): string {
     for (const t of loose) lines.push(`  ${taskLine(t, '')}`);
   }
   if (!lines.length) lines.push('No goals or tasks yet.');
+  if (s.stopped) lines.unshift(`TEAM STOPPED by ${s.stopped.by}: ${s.stopped.reason}`, '');
   if (s.questions.length) {
     lines.push('', 'Waiting on the owner:');
     for (const q of s.questions) lines.push(`  Q${q.id} from ${q.asker}: ${clip(q.text, 160)}`);

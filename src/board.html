@@ -57,6 +57,9 @@ button, .btn {
 }
 button:hover, .btn:hover { border-color: var(--muted); }
 button.active { background: var(--soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+button.danger { background: var(--blocked); color: var(--bg); border-color: var(--blocked); font-weight: 600; }
+.stopbar { border: 2px solid var(--blocked); border-radius: 8px; padding: 10px 12px; margin: 12px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.stopbar .msg { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
 button:focus-visible, .btn:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input, textarea, select { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; width: 100%; }
@@ -177,6 +180,7 @@ details[open] > summary::before { content: "▾"; }
       <div class="actions">
         <button id="btn-goal" type="button" class="hidden" aria-expanded="false">+ Goal</button>
         <button id="btn-msg" type="button" class="hidden" aria-expanded="false">Message</button>
+        <button id="btn-stop" type="button" class="danger hidden">Stop team</button>
         <a id="wiki-link" class="btn hidden" href="/wiki">Wiki</a>
         <button id="refresh" type="button" class="hidden">Refresh</button>
         <button id="logout" type="button" class="hidden">Sign out</button>
@@ -204,6 +208,8 @@ details[open] > summary::before { content: "▾"; }
       </form>
       <div class="err" id="form-err" role="alert"></div>
     </section>
+
+    <section id="stopbar" class="stopbar hidden" role="status" aria-label="Team stopped"></section>
 
     <section id="needs" class="hidden">
       <h2>Needs you</h2>
@@ -295,6 +301,15 @@ details[open] > summary::before { content: "▾"; }
     $('login').classList.add('hidden');
     $('board').classList.remove('hidden');
     $('wiki-link').classList.toggle('hidden', !(s.wiki && !inApp));
+
+    const stop = s.stopped;
+    $('stopbar').classList.toggle('hidden', !stop);
+    $('stopbar').replaceChildren(...(stop ? [
+      h('span', { class: 'msg' }, h('strong', {}, 'Team stopped'), ' by ' + stop.by + ' at ' + clock(stop.at) + (stop.reason ? ': ' + stop.reason : '')),
+      inApp ? null : h('button', { type: 'button', class: 'primary', onclick: () => post('/api/resume', {}).catch(alertErr) }, 'Resume'),
+    ].filter(Boolean) : []));
+    $('btn-stop').textContent = stop ? 'Stopped' : 'Stop team';
+    $('btn-stop').disabled = Boolean(stop);
 
     const goalById = new Map(s.goals.map((g) => [g.id, g]));
     const blockedTasks = s.tasks.filter((t) => t.state === 'blocked');
@@ -480,6 +495,11 @@ details[open] > summary::before { content: "▾"; }
   function startWeb() {
     $('btn-goal').classList.remove('hidden');
     $('btn-msg').classList.remove('hidden');
+    $('btn-stop').classList.remove('hidden');
+    $('btn-stop').addEventListener('click', () => {
+      const why = window.prompt('Stop every agent. Why?', 'Owner stopped the team');
+      if (why !== null) post('/api/pause', { reason: why.trim() || 'Owner stopped the team' }).catch(alertErr);
+    });
     $('logout').classList.remove('hidden');
     $('btn-goal').addEventListener('click', () => setCompose(composeMode === 'goal' ? null : 'goal'));
     $('btn-msg').addEventListener('click', () => setCompose(composeMode === 'msg' ? null : 'msg'));

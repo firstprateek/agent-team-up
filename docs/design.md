@@ -66,6 +66,7 @@ corrections and preferences. It lives on disk (and in git), not in SQLite; see [
 | `update` | Change a task I hold: `state`, a `note`, `links` (PRs, branches, files). `handoff` gives it to another agent (for a review, say) and releases it. |
 | `send` | A message to an agent, to `all`, or to `owner`. To `owner` it becomes a question on the board. |
 | `wait` | Blocks until something arrives for me or `seconds` (default 45, max 55) pass. Returns the new events; task notes in them are clipped to 200 characters. |
+| `pause_team`, `resume_team` | Team-wide stop switch (below). |
 | `set_status` | `available` or `resting` (with `until` and a note), so others route work around me. |
 | `wiki_search`, `wiki_read`, `wiki_save` | Only when `--wiki` is set: search, read and save the team wiki. Saves need the page's `version` and pass a privacy check. See [wiki.md](wiki.md). |
 | `board` | Shows the board (an MCP App where the client supports it; a text summary otherwise). |
@@ -92,6 +93,26 @@ The old holder's later `update` is refused ("taken over by X; coordinate with se
 takeover event, so there is no extra column. `team` lists paused tasks (five lines at most) and the board
 badges them. Agents are told to checkpoint (push WIP, keep the note as done / next) so a takeover has
 something to start from.
+
+## Stop and resume
+
+One switch stops every agent, whatever app it runs in. State is four `meta` keys (`paused`, `paused_by`,
+`paused_reason`, `paused_at`), so there is no schema change. `pause_team {reason}` (any agent) or the
+board's Stop team button (owner API `/api/pause`) sets it and logs one event from `team` to audience `all`.
+Because the sender is the reserved name `team`, the pauser hears it too, and `wait` returns at once:
+"TEAM STOPPED by X: reason. Checkpoint now (commit + push WIP, update your task note with done/next), stop
+your background waiter, and end your turn. Don't start anything new until the owner resumes."
+`resume_team` (or the board's Resume) clears it and tells everyone to call `team` and carry on.
+
+While stopped, `claim` and `post_task` are refused with "Team is stopped by X: reason" (the owner can still
+post from the board). `update`, `send`, `task`, `team` and wiki reads keep working so agents can
+checkpoint. `team` opens with a banner line, and the board shows a banner with a Resume button.
+
+Takeover timer: while stopped, `paused()` returns null for every task, so nothing is takeable or badged
+as paused. On resume every `working` task's `updated_at` is refreshed, so the stopped interval never
+counts towards `--stale-minutes` and nothing turns stale the moment the team resumes. (The cost: the real
+last-update time of a working task is lost; the note and links are untouched.) A holder that is resting
+still shows as paused after resume.
 
 ## Board
 
