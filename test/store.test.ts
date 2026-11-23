@@ -129,6 +129,11 @@ describe('tasks', () => {
     assert.ok(line.length < 320, `${line.length}`);
     assert.match(line, new RegExp(`\\(task ${t2.id} for the full note\\)$`));
     assert.equal(s.task(t2.id)!.note, 'n'.repeat(900));
+    // A short multi-line note gets no pointer.
+    s.claim('codex', t2.id);
+    s.takeInbox('claude');
+    s.update('codex', t2.id, { handoff: 'claude', note: 'Done.\nTests pass.' });
+    assert.match(s.takeInbox('claude').events[0].text, /: Done\. Tests pass\.$/);
     assert.throws(() => s.update('codex', t.id, { handoff: 'nobody' }), /no agent/);
   });
 

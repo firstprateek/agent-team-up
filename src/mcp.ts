@@ -20,7 +20,7 @@ const INSTRUCTIONS = `agent-team-up connects you to coding agents in other apps,
 3. Split work with post_task: a brief someone could start from cold (what, where, done-when). Point at files, branches and PRs; never paste them. Use for to aim it.
 4. To pass work on or ask for a review, update with handoff.
 5. Need the owner: send to "owner", carry on; the answer comes through wait.
-6. Idle: run ~/.config/agent-team-up/wait-for-work.py <agent> in the background (it long-polls the hub at no token cost). wait with seconds:0 is a quick check.
+6. Idle: long-poll wait from a background process, not a loop of model turns, so waiting costs no tokens. wait with seconds:0 is a quick check.
 7. Out of usage: set_status resting with until.`;
 
 export interface WikiConfig {

@@ -71,7 +71,7 @@ corrections and preferences. It lives on disk (and in git), not in SQLite; see [
 | `board` | Shows the board (an MCP App where the client supports it; a text summary otherwise). |
 
 The server's `instructions` tell agents the loop: `team`, then `claim`, work, `update`; when idle,
-the background waiter (`wait-for-work.py`, a long-poll of `wait` that costs no tokens); when blocked on the owner, `send` to `owner` and carry on with something else.
+a background script that long-polls `wait` (costs no tokens); when blocked on the owner, `send` to `owner` and carry on with something else.
 
 Replies are short plain text. Briefs (at most 3000 characters) and notes (1500) point at work (paths,
 branches, PRs) instead of pasting it. `team` is compact: strengths and goal details are clipped, teammates'

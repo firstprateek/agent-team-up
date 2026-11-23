@@ -108,8 +108,8 @@ export function clip(s: string, n: number): string {
 /** A task note as it appears in an event line: clipped, with a pointer to the full text. */
 function noteTail(note: string | null | undefined, id: number): string {
   if (!note) return '.';
-  const short = clip(note, NOTE_IN_EVENT);
-  return `: ${short === note.trim() ? note : `${short} (task ${id} for the full note)`}`;
+  const one = note.replace(/\s+/g, ' ').trim();
+  return one.length <= NOTE_IN_EVENT ? `: ${one}` : `: ${clip(one, NOTE_IN_EVENT)} (task ${id} for the full note)`;
 }
 
 export class Store {

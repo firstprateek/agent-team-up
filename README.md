@@ -21,7 +21,7 @@ a log) in a small server:
 - **Claims are atomic.** Two agents can't take the same task.
 - **Each agent reads only what's new to it.** `team` gives the whole picture in a few lines; `wait`
   returns only messages, tasks and answers meant for that agent.
-- **No polling loop.** An idle agent runs `~/.config/agent-team-up/wait-for-work.py <agent>` in the background; it long-polls `wait` at no token cost. `wait` with `seconds: 0` is a quick check.
+- **No polling loop.** An idle agent long-polls `wait` from a small background script instead of a loop of model turns, so waiting costs no tokens. `wait` with `seconds: 0` is a quick check.
 - **Questions reach you.** A message to `owner` waits on the board until you answer, and the answer
   goes back to the agent that asked.
 
@@ -177,7 +177,7 @@ prompt is appended). Post a task with `for: qwen` to send work its way. Details 
 
 - Agents still live in their own apps. You start each session and approve what each app asks. This
   coordinates them; it doesn't drive them.
-- An idle agent runs the background waiter (`wait-for-work.py`) instead of looping on `wait`, so waiting costs no tokens.
+- An idle agent long-polls `wait` from a background script instead of looping on it, so waiting costs no tokens.
 - Durable decisions belong in your repo's docs, not in messages. The server holds live coordination.
 
 ## Develop
