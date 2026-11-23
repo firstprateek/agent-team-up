@@ -3,11 +3,11 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createHub } from '../src/http.ts';
-import { parseDuration, runLoop, runOnce, RunnerFatal, type RunnerOptions } from '../src/runner.ts';
+import { parseDuration, parseRepoLine, runLoop, runOnce, RunnerFatal, type RunnerOptions } from '../src/runner.ts';
 import { STOPPED_PREFIX, Store } from '../src/store.ts';
 
 const FAKE = join(import.meta.dirname, 'fake-agent.ts');
@@ -52,6 +52,116 @@ function opts(mode: string, extra: Partial<RunnerOptions> = {}): RunnerOptions {
 }
 
 const post = (a: { title: string; brief: string; for?: string }, by = 'claude') => store.postTask(by, a);
+
+function mkRepo(name: string): { repo: string; g: (...a: string[]) => string } {
+  const repo = join(tmp, name);
+  mkdirSync(repo);
+  const g = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
+  g('init', '-q', '-b', 'main');
+  g('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'init');
+  return { repo, g };
+}
+
+describe('runner: commit gate, WIP, handback', () => {
+  test('review with 0 commits ahead is sent back as blocked', async () => {
+    const { repo } = mkRepo('gate-empty');
+    const t = post({ title: 'Empty', brief: `Repo: ${repo}`, for: 'qwen' });
+    const r = await runOnce(opts('finish'));
+    assert.equal(r!.outcome, 'blocked');
+    const after = store.task(t.id)!;
+    assert.equal(after.state, 'blocked');
+    assert.match(after.note, /Not accepted: review was requested but the branch has 0 commits ahead of /);
+    assert.match(after.note, /0 uncommitted files/);
+    assert.match(after.note, /git add -A && git commit/);
+  });
+
+  test('review with a dirty tree is blocked, and the work is saved as a WIP commit', async () => {
+    const { repo, g } = mkRepo('gate-dirty');
+    const t = post({ title: 'Dirty', brief: `Repo: ${repo}`, for: 'qwen' });
+    const r = await runOnce(opts('dirty'));
+    const after = store.task(t.id)!;
+    assert.equal(after.state, 'blocked');
+    assert.match(after.note, /1 uncommitted file in the worktree/);
+    const sha = /WIP commit ([0-9a-f]+)/.exec(after.note)?.[1];
+    assert.ok(sha, after.note);
+    const subject = g('log', '-1', '--format=%s%n%b', `qwen/task-${t.id}`);
+    assert.match(subject, new RegExp(`^WIP \\(auto\\): task ${t.id} \\(`));
+    assert.doesNotMatch(subject, /Co-authored-by/i);
+    assert.equal(execFileSync('git', ['-C', r!.cwd!, 'status', '--porcelain'], { encoding: 'utf8' }), '');
+  });
+
+  test('a clean, committed review passes the gate', async () => {
+    const { repo } = mkRepo('gate-ok');
+    const t = post({ title: 'Good', brief: `Repo: ${repo}`, for: 'qwen' });
+    assert.equal((await runOnce(opts('commit')))!.outcome, 'finished');
+    assert.equal(store.task(t.id)!.state, 'review');
+  });
+
+  test('a timeout with a dirty tree saves WIP; the re-run prompt shows it and the note', async () => {
+    const { repo, g } = mkRepo('wip-timeout');
+    const t = post({ title: 'Slow', brief: `Repo: ${repo}`, for: 'qwen' });
+    const o = opts('dirty-hang', { timeoutMs: 1500, killGraceMs: 200 });
+    const first = await runOnce(o);
+    assert.equal(first!.timedOut, true);
+    assert.match(g('log', '-1', '--format=%s', `qwen/task-${t.id}`), new RegExp(`^WIP \\(auto\\): task ${t.id} \\(timed out after 1\\.5s\\)$`));
+    assert.match(store.task(t.id)!.note, /saved as WIP commit/);
+    store.update('owner', t.id, { state: 'open', note: 'Please commit after each step and finish the tests.' }, true);
+    store.update('owner', t.id, { handoff: 'qwen' }, true);
+    const second = await runOnce({ ...o, command: opts('fail').command });
+    assert.equal(second!.cwd, first!.cwd);
+    const log = readFileSync(second!.log!, 'utf8');
+    const prompt = log.slice(log.lastIndexOf('# prompt'));
+    assert.match(prompt, /Please commit after each step and finish the tests\./);
+    assert.match(prompt, /Previous work is already on this branch/);
+    assert.match(prompt, /WIP \(auto\): task \d+/);
+    assert.match(prompt, /git status/);
+  });
+
+  test('a nonzero exit with changes also saves WIP, and node_modules is never committed', async () => {
+    const { repo, g } = mkRepo('wip-exit');
+    const t = post({ title: 'Crash', brief: `Repo: ${repo}`, for: 'qwen' });
+    const o = opts('fail');
+    // Pre-create the worktree through a first (clean) failing run, then dirty it by hand.
+    const first = await runOnce(o);
+    mkdirSync(join(first!.cwd!, 'node_modules', 'x'), { recursive: true });
+    execFileSync('sh', ['-c', 'echo a > node_modules/x/i.js; echo b > new.txt'], { cwd: first!.cwd });
+    store.update('owner', t.id, { state: 'open' }, true);
+    store.update('owner', t.id, { handoff: 'qwen' }, true);
+    await runOnce(o);
+    const files = g('show', '--name-only', '--format=', `qwen/task-${t.id}`);
+    assert.equal(files, 'new.txt');
+  });
+
+  test('a handoff with an empty branch cannot be reverted, so the new holder is messaged', async () => {
+    const { repo } = mkRepo('gate-handoff');
+    const t = post({ title: 'Handoff', brief: `Repo: ${repo}`, for: 'qwen' });
+    await runOnce(opts('dirty-handoff'));
+    assert.equal(store.task(t.id)!.for_agent, 'claude');
+    const rows = (store as unknown as { db: { prepare: (q: string) => { all: (...a: unknown[]) => { text: string }[] } } }).db
+      .prepare("SELECT text FROM events WHERE task_id = ? AND audience = 'claude' AND sender = 'qwen'")
+      .all(t.id);
+    assert.ok(rows.some((e) => /1 uncommitted file/.test(e.text) && /0 commits ahead/.test(e.text)), JSON.stringify(rows));
+  });
+
+  test('Repo: parsing', () => {
+    assert.equal(parseRepoLine('no repo here'), undefined);
+    assert.equal(parseRepoLine('Repo: /a/b'), '/a/b');
+    assert.equal(parseRepoLine('x\nRepo: /a/b. Read README.md first\ny'), '/a/b');
+    assert.equal(parseRepoLine('Repo: /a/b, then more'), '/a/b');
+    assert.equal(parseRepoLine('Repo: /a/b;'), '/a/b');
+    assert.equal(parseRepoLine('Repo:   `/a/b`.'), '/a/b');
+    assert.equal(parseRepoLine('Repo: ~/projects/x'), join(homedir(), 'projects/x'));
+    assert.equal(parseRepoLine('Repo: ~/projects/x. Read README'), join(homedir(), 'projects/x'));
+    assert.equal(parseRepoLine('Repo: ~'), homedir());
+  });
+
+  test('a Repo: path that does not exist blocks and quotes the parsed path', async () => {
+    const t = post({ title: 'Missing', brief: `Repo: ${tmp}/nope/here. Read README.md`, for: 'qwen' });
+    const r = await runOnce(opts('finish'));
+    assert.equal(r!.outcome, 'setup-failed');
+    assert.match(store.task(t.id)!.note, new RegExp(`Repo path "${tmp}/nope/here" does not exist`));
+  });
+});
 
 describe('runner', () => {
   test('a run that updates its task to review leaves it there', async () => {
@@ -121,12 +231,12 @@ describe('runner', () => {
     g('init', '-q', '-b', 'main');
     g('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'init');
     const t = post({ title: 'In a repo', brief: `Do work.\nRepo: ${repo}\n`, for: 'qwen' });
-    const r = await runOnce(opts('finish'));
+    const r = await runOnce(opts('commit'));
     assert.equal(r!.outcome, 'finished');
     assert.match(r!.cwd!, /myrepo-task-\d+$/);
     assert.equal(execFileSync('git', ['-C', r!.cwd!, 'branch', '--show-current'], { encoding: 'utf8' }).trim(), `qwen/task-${t.id}`);
     assert.match(readFileSync(r!.log!, 'utf8'), new RegExp(`Commit your work on branch qwen/task-${t.id}`));
-    assert.equal(g('rev-parse', 'HEAD'), execFileSync('git', ['-C', r!.cwd!, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
+    assert.notEqual(g('rev-parse', 'HEAD'), execFileSync('git', ['-C', r!.cwd!, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), 'the agent committed on its branch');
   });
 
   test('a Repo: that is not a git repo blocks the task without running anything', async () => {

@@ -57,6 +57,7 @@ interface TaskData {
   for_agent: string | null;
   claimed_by: string | null;
   state: string;
+  note?: string;
 }
 
 export const MIN_HUB_VERSION = '0.5.0';
@@ -126,10 +127,56 @@ async function tool(c: Client, name: string, args: Record<string, unknown>) {
   return { text, task: (r.structuredContent as { task?: TaskData } | undefined)?.task };
 }
 
-function git(args: string[]): Promise<string> {
+function git(args: string[], raw = false): Promise<string> {
   return new Promise((res, rej) => {
-    execFile('git', args, { encoding: 'utf8' }, (err, stdout, stderr) => (err ? rej(new Error((stderr || err.message).trim())) : res(stdout.trim())));
+    execFile('git', args, { encoding: 'utf8' }, (err, stdout, stderr) => (err ? rej(new Error((stderr || err.message).trim())) : res(raw ? stdout : stdout.trim())));
   });
+}
+
+/** Never snapshot or count dependency folders, even when a repo forgot to ignore them. */
+const NO_MODULES = [':(exclude,glob)**/node_modules/**'];
+
+/** What the task branch looks like: commits ahead of its base, and uncommitted (non-ignored) files. */
+interface BranchState {
+  base?: string;
+  /** `git log --oneline base..HEAD`, newest first; undefined when the base is unknown. */
+  commits?: string[];
+  /** `git status --porcelain` lines. */
+  dirty: string[];
+}
+
+async function baseOf(cwd: string, branch: string): Promise<string | undefined> {
+  const saved = await git(['-C', cwd, 'config', '--get', `branch.${branch}.runnerBase`]).catch(() => '');
+  if (saved) return saved;
+  for (const ref of ['origin/HEAD', 'main', 'master']) {
+    if (await git(['-C', cwd, 'rev-parse', '--verify', '--quiet', ref]).then(() => true, () => false)) return ref;
+  }
+  return undefined;
+}
+
+async function branchState(cwd: string, branch: string): Promise<BranchState> {
+  const base = await baseOf(cwd, branch);
+  const commits = base ? (await git(['-C', cwd, 'log', '--oneline', `${base}..HEAD`]).catch(() => undefined))?.split('\n').filter(Boolean) : undefined;
+  const dirty = (await git(['-C', cwd, 'status', '--porcelain', '--', '.', ...NO_MODULES], true)).split('\n').filter(Boolean);
+  return { base, commits, dirty };
+}
+
+/** Commits everything (except ignored files and node_modules) as a WIP commit. Returns the short sha, or undefined if nothing to commit. */
+async function saveWip(cwd: string, agent: string, id: number, reason: string): Promise<string | undefined> {
+  const ident: string[] = [];
+  if (!(await git(['-C', cwd, 'config', 'user.name']).catch(() => ''))) ident.push('-c', `user.name=${agent}`);
+  if (!(await git(['-C', cwd, 'config', 'user.email']).catch(() => ''))) ident.push('-c', `user.email=${agent}@users.noreply.agent-team-up.invalid`);
+  await git(['-C', cwd, 'add', '-A', '--', '.', ...NO_MODULES]);
+  const msg = `WIP (auto): task ${id} (${reason})`;
+  const commit = (hooks: string[]) => git(['-C', cwd, ...hooks, ...ident, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', msg]);
+  try {
+    await commit([]);
+  } catch (err) {
+    if (/nothing (added )?to commit/i.test((err as Error).message)) return undefined;
+    // The repo's own hooks (tests, lint) must not stop us saving the work.
+    await commit(['-c', 'core.hooksPath=/dev/null']);
+  }
+  return git(['-C', cwd, 'rev-parse', '--short', 'HEAD']);
 }
 
 function clip(s: string, n = 300): string {
@@ -137,32 +184,52 @@ function clip(s: string, n = 300): string {
   return one.length > n ? `${one.slice(0, n - 1)}…` : one;
 }
 
-function buildPrompt(agent: string, t: TaskData, cwd: string, branch: string | undefined): string {
+/** The first `Repo:` path in a brief: first token, trailing punctuation dropped, `~` expanded. */
+export function parseRepoLine(brief: string): string | undefined {
+  const raw = /^Repo:[ \t]*(\S+)/m.exec(brief)?.[1];
+  if (!raw) return undefined;
+  const p = raw.replace(/^["'`(]+/, '').replace(/["'`)]*[.,;:]*["'`)]*$/, '');
+  if (!p) return undefined;
+  return resolve(p === '~' ? homedir() : p.startsWith('~/') ? join(homedir(), p.slice(2)) : p);
+}
+
+function buildPrompt(agent: string, t: TaskData, cwd: string, branch: string | undefined, prior?: BranchState): string {
   const handoff = t.posted_by !== agent && t.posted_by !== 'owner' ? `, and handoff "${t.posted_by}"` : '';
-  return [
+  const lines = [
     `You are ${agent} on the agent-team-up team. You already hold task #${t.id}; don't claim other tasks.`,
     '',
     `# ${t.title}`,
     t.brief,
     '',
+  ];
+  if (t.note?.trim()) lines.push(`Latest note on this task (from the reviewer, or from your previous run; follow it):`, t.note.trim(), '');
+  if (prior && (prior.commits?.length || prior.dirty.length)) {
+    lines.push('Previous work is already on this branch; continue it, don\'t start over.');
+    if (prior.commits?.length) lines.push(`Commits so far (git log --oneline ${prior.base}..HEAD):`, ...prior.commits.slice(0, 20).map((c) => `  ${c}`));
+    if (prior.dirty.length) lines.push(`Uncommitted changes (${prior.dirty.length} files, git status --short):`, ...prior.dirty.slice(0, 20).map((c) => `  ${c}`));
+    lines.push('');
+  }
+  lines.push(
     `Work only in ${cwd}.${branch ? ` Commit your work on branch ${branch}. Don't push.` : ''}`,
-    `When you finish, call the team tool update with task ${t.id}, state "review", a one- or two-sentence note, and links (branch and main files)${handoff}.`,
-    'If you can\'t finish, call update with state "blocked" and a note saying why.',
+    'This run is time-limited and unsaved work is lost: commit after each meaningful step (small commits), not just at the end.',
+    `Before you hand off: run the project's full check and test commands (the ones named in the brief, or the scripts in package.json), then \`git add -A && git commit\`, and confirm \`git status\` shows a clean tree. A task with no commits, or with uncommitted changes, is sent back as blocked.`,
+    `Only then call the team tool update with task ${t.id}, state "review", a one- or two-sentence note, and links (branch and main files)${handoff}.`,
+    'If you can\'t finish, commit what you have, then call update with state "blocked" and a note saying why.',
     'If you need a decision from the owner, call send with to "owner".',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 /** Makes the directory the agent works in (reusing it on a re-run). Returns the branch for a git worktree. */
 async function setupWorkdir(o: RunnerOptions, t: TaskData): Promise<{ cwd: string; branch?: string }> {
-  const m = /^Repo:[ \t]*(.+?)[ \t]*$/m.exec(t.brief);
+  const repo = parseRepoLine(t.brief);
   mkdirSync(o.worktrees, { recursive: true, mode: 0o700 });
-  if (!m) {
+  if (!repo) {
     const cwd = join(o.worktrees, `task-${t.id}`);
     mkdirSync(cwd, { recursive: true });
     return { cwd };
   }
-  const raw = m[1];
-  const repo = resolve(raw === '~' ? homedir() : raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw);
+  if (!existsSync(repo)) throw new Error(`Repo path "${repo}" does not exist (parsed from the Repo: line; only its first word is used)`);
   await git(['-C', repo, 'rev-parse', '--git-dir']);
   const branch = `${o.agent}/task-${t.id}`;
   const cwd = join(o.worktrees, `${basename(repo)}-task-${t.id}`);
@@ -178,6 +245,8 @@ async function setupWorkdir(o: RunnerOptions, t: TaskData): Promise<{ cwd: strin
   } else {
     const base = await git(['-C', repo, 'rev-parse', '--verify', '--quiet', 'origin/HEAD']).then(() => 'origin/HEAD', () => 'HEAD');
     await git(['-C', repo, 'worktree', 'add', '-b', branch, cwd, base]);
+    // Remember where the branch started, so the commit gate can count commits on a later run.
+    await git(['-C', repo, 'config', `branch.${branch}.runnerBase`, await git(['-C', repo, 'rev-parse', base])]);
   }
   return { cwd, branch };
 }
@@ -384,7 +453,8 @@ export async function runOnce(o: RunnerOptions): Promise<RunResult | undefined> 
       log(`#${t.id} setup failed: ${setupError}`);
     }
     if (work && !o.signal?.aborted) {
-      const prompt = buildPrompt(o.agent, t, work.cwd, work.branch);
+      const prior = work.branch ? await branchState(work.cwd, work.branch).catch(() => undefined) : undefined;
+      const prompt = buildPrompt(o.agent, t, work.cwd, work.branch, prior);
       const argv = o.promptStdin ? o.command : o.command.some((a) => a.includes('{prompt}')) ? o.command.map((a) => a.replaceAll('{prompt}', () => prompt)) : [...o.command, prompt];
       log(`#${t.id} run started (cwd ${work.cwd}, log ${logPath})`);
       try {
@@ -409,16 +479,52 @@ export async function runOnce(o: RunnerOptions): Promise<RunResult | undefined> 
             : exit?.error
               ? `failed to start: ${clip(exit.error, 120)}`
               : `exit ${exit?.code ?? exit?.signal}`;
+    // What the agent left behind, measured before anything is saved.
+    let found: BranchState | undefined;
+    if (work?.branch) found = await branchState(work.cwd, work.branch).catch((e) => (log(`#${t.id} couldn't inspect the branch: ${clip((e as Error).message, 150)}`), undefined));
+    let wip: { sha?: string; error?: string } | undefined;
+    const saveOnce = async (reason: string) => {
+      if (wip || !work?.branch || !found?.dirty.length) return;
+      try {
+        wip = { sha: await saveWip(work.cwd, o.agent, t.id, reason) };
+        log(`#${t.id} saved uncommitted work as ${wip.sha ?? 'nothing'}`);
+      } catch (err) {
+        wip = { error: clip((err as Error).message, 150) };
+        log(`#${t.id} couldn't save WIP: ${wip.error}`);
+      }
+    };
+    const wipNote = () => (wip?.sha ? ` Uncommitted work saved as WIP commit ${wip.sha}.` : wip?.error ? ` Saving WIP failed: ${wip.error}.` : '');
     const settled = await persist(o, `finishing #${t.id}`, () =>
       withClient(
         o,
         async (c) => {
           const after = (await tool(c, 'task', { task: t.id, structured: true })).task;
-          if (after && after.claimed_by === o.agent && after.state === 'working') {
+          const mine = after?.claimed_by === o.agent;
+          const handedOff = !!after && !mine && after.state === 'open' && !!after.for_agent && after.for_agent !== o.agent;
+          const problems: string[] = [];
+          if (found && work?.branch && ((mine && (after!.state === 'review' || after!.state === 'done')) || handedOff)) {
+            if (found.commits && found.commits.length === 0) problems.push(`the branch has 0 commits ahead of ${found.base}`);
+            if (found.dirty.length) problems.push(`${found.dirty.length} uncommitted file${found.dirty.length === 1 ? '' : 's'} in the worktree`);
+          }
+          if (mine && after!.state === 'working') {
+            await saveOnce(how);
             const note = setupError || startError ? how : exit?.stopped ? 'runner stopped' : `run ended without finishing (${how}). Log: ${logPath}`;
-            await tool(c, 'update', { task: t.id, state: 'blocked', note: clip(note, 1400), links: clip(work?.cwd ?? '', 900) });
+            await tool(c, 'update', { task: t.id, state: 'blocked', note: clip(`${note}${wipNote()}`, 1400), links: clip(work?.cwd ?? '', 900) });
             return { state: 'blocked', blocked: true };
           }
+          if (problems.length) {
+            await saveOnce('not committed at handoff');
+            const found_ = `Found: ${found!.commits ? `${found!.commits.length} commits ahead of ${found!.base}` : 'commit count unknown'}, ${found!.dirty.length} uncommitted files.`;
+            const fix = `Do: run the full checks, git add -A && git commit, confirm git status is clean, then update to review again.${wipNote()}`;
+            if (mine) {
+              await tool(c, 'update', { task: t.id, state: 'blocked', note: clip(`Not accepted: ${after!.state} was requested but ${problems.join(' and ')}. ${found_} ${fix} Log: ${logPath}`, 1400), links: clip(work?.cwd ?? '', 900) });
+              return { state: 'blocked', blocked: true };
+            }
+            // After a handoff the task is no longer ours to change; tell its new holder instead.
+            await tool(c, 'send', { to: after!.for_agent, task: t.id, text: clip(`#${t.id} was handed to you but ${problems.join(' and ')} (${work!.cwd}). ${found_} ${wipNote().trim()}`, 900) });
+            return { state: after!.state, blocked: false };
+          }
+          await saveOnce(how);
           return { state: after?.state ?? 'unknown', blocked: false };
         },
         false,

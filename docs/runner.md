@@ -71,10 +71,13 @@ agent-team-up run qwen --prompt-stdin --key-file ~/.config/agent-team-up/keys/qw
 
 1. `claim { mine_only: true }`. Nothing -> sleep `--poll` seconds and try again. A failed call (hub down)
    is logged and retried on the next poll with backoff up to 2 minutes; the runner never exits on its own.
-2. **Where to work.** If the brief has a line `Repo: <path>` (`~` expands) and the path is a git repo,
-   create a worktree on a new branch (a re-run reuses the worktree if it is on that branch, and checks
-   out the existing branch if only the worktree is gone): `git -C <repo> worktree add -b <agent>/task-<id> <worktrees>/<repo
-   dir name>-task-<id> <base>`, where `<base>` is `origin/HEAD` if it resolves, else `HEAD`. Otherwise use a
+2. **Where to work.** If the brief has a line `Repo: <path>` and the path is a git repo (only the first
+   whitespace-delimited word after `Repo:` is the path; trailing `.,;:` and quotes are dropped; `~` and `~/` expand;
+   a path that doesn't exist blocks the task with a note quoting the parsed path),
+   create a worktree on a new branch (a re-run reuses the worktree and branch as they are, uncommitted files and WIP commits
+   included, and checks out the existing branch if only the worktree is gone; nothing is ever reset): `git -C <repo> worktree add -b <agent>/task-<id> <worktrees>/<repo
+   dir name>-task-<id> <base>`, where `<base>` is `origin/HEAD` if it resolves, else `HEAD`. The base commit
+   is saved in the repo's git config (`branch.<branch>.runnerBase`) so later runs can count commits. Otherwise use a
    new empty directory `<worktrees>/task-<id>`. If setup fails (branch exists, not a repo), mark the task
    `blocked` with the git error as the note and move on.
 3. **Prompt** (built in code, kept short):
@@ -85,10 +88,16 @@ agent-team-up run qwen --prompt-stdin --key-file ~/.config/agent-team-up/keys/qw
    # <title>
    <brief>
 
+   [Latest note on this task (from the reviewer, or from your previous run; follow it): <note>]
+   [Previous work is already on this branch ... commits (git log --oneline <base>..HEAD) and
+   uncommitted files (git status --short), up to 20 lines each]
+
    Work only in <cwd>. [Commit your work on branch <branch>. Don't push.]
-   When you finish, call the team tool update with task <id>, state "review", a one- or two-sentence
-   note, and links (branch and main files) [, and handoff "<poster>"].
-   If you can't finish, call update with state "blocked" and a note saying why.
+   Commit after each meaningful step (runs are time-limited and unsaved work is lost).
+   Before you hand off: run the project's full check and test commands, `git add -A && git commit`,
+   confirm `git status` is clean. Only then call the team tool update with task <id>, state "review", a
+   one- or two-sentence note, and links (branch and main files) [, and handoff "<poster>"].
+   If you can't finish, commit what you have, then call update with state "blocked" and a note why.
    If you need a decision from the owner, call send with to "owner".
    ```
 
@@ -98,11 +107,26 @@ agent-team-up run qwen --prompt-stdin --key-file ~/.config/agent-team-up/keys/qw
    appended to `<logs>/<agent>-task-<id>.log` (mode 600; each run starts with `# run <time>` and the prompt),
    in its own process group. On timeout: SIGTERM to the group, then SIGKILL after 10 s. When the process
    exits, anything it left in the group gets SIGTERM, and SIGKILL after the same 10 s.
-5. **After it exits,** read the task with `task`. If this agent still holds it in state `working`, the run
+5. **Commit gate and WIP save** (git worktrees only, i.e. tasks with a `Repo:`). After the CLI exits the
+   runner looks at the branch: commits ahead of the saved base, and uncommitted files (`git status
+   --porcelain`: ignored files don't count, and `node_modules` is never counted or committed).
+   - If this agent moved the task to `review` (or `done`) and the branch has 0 commits ahead or the tree is
+     dirty, the runner sets it to `blocked`: "Not accepted: review was requested but ... Found: N commits
+     ahead of <base>, M uncommitted files. Do: run the full checks, git add -A && git commit, confirm git
+     status is clean, then update to review again." If the agent handed the task to someone, the task is no
+     longer this agent's to change (the hub only lets the holder update), so the runner `send`s the new
+     holder the same finding instead.
+   - Whenever the run ends with a dirty tree (timeout, nonzero exit, runner stop, gate failure, or the agent
+     blocking itself), the runner commits everything as `WIP (auto): task <id> (<reason>)` on the task
+     branch, using normal git (hooks run; if a hook rejects the commit it retries with
+     `core.hooksPath=/dev/null` so work is never lost). It uses the repo's git identity, falling back to
+     `<agent>` / `<agent>@users.noreply.agent-team-up.invalid`, and adds no Co-authored-by trailer. The WIP
+     commit sha goes in the task note.
+6. **After it exits,** read the task with `task`. If this agent still holds it in state `working`, the run
    ended without finishing: `update` it to `blocked` with the note `run ended without finishing (exit
-   <code>|timed out after <dur>). Log: <path>` and the worktree as links. `blocked` already tells the
+   <code>|timed out after <dur>). Log: <path>` (plus the WIP sha, if any) and the worktree as links. `blocked` already tells the
    poster through the hub. In any other state the agent did its part; log the outcome.
-6. Leave the worktree in place either way: the reviewer reads the branch from it, and removing it is
+7. Leave the worktree in place either way: the reviewer reads the branch from it, and removing it is
    their call (`git worktree remove`).
 
 Nothing after a claim may leave the task `working`: if setup, opening the log, starting the process or
@@ -133,6 +157,12 @@ One line per event to stdout (the LaunchAgent's log): started (agent, hub), clai
 (cwd, log), run ended (exit code or timeout, task state after), errors. Never the key, never the brief.
 
 ## Limits
+
+- Progress isn't logged while the CLI runs: only its own output reaches the log. If Qwen Code gets a
+  streaming output mode, pass it in the command (e.g. `--output-format stream-json`) to see where a timeout
+  stopped; the runner doesn't parse it.
+- The commit gate can only block a task the agent still holds. A handoff with an empty branch is reported to
+  the new holder by message, not reverted.
 
 - After a crash of the runner itself (not a clean stop), a task it held stays `working`. The owner can
   reopen it from the board. The runner only looks for a held `working` task right after a failed claim.
