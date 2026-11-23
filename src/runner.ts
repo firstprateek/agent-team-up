@@ -134,7 +134,15 @@ function git(args: string[], raw = false): Promise<string> {
 }
 
 /** Never snapshot or count dependency folders, even when a repo forgot to ignore them. */
-const NO_MODULES = [':(exclude,glob)**/node_modules/**'];
+// Never auto-commit dependencies or build/cache junk, even in repos without a .gitignore.
+const NO_MODULES = [
+  ':(exclude,glob)**/node_modules/**',
+  ':(exclude,glob)**/__pycache__/**',
+  ':(exclude,glob)**/*.pyc',
+  ':(exclude,glob)**/.DS_Store',
+  ':(exclude,glob)**/.pytest_cache/**',
+  ':(exclude,glob)**/.venv/**',
+];
 
 /** What the task branch looks like: commits ahead of its base, and uncommitted (non-ignored) files. */
 interface BranchState {
