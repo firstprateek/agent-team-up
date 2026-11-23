@@ -119,6 +119,14 @@ named, it refuses at startup; if a claim still comes back for another agent, it 
 On SIGTERM, SIGINT or SIGHUP the runner stops the current run the same way as a timeout, marks the task
 `blocked` (`runner stopped`) and exits.
 
+## Team stop
+
+While the team is stopped (`pause_team` or the board's Stop team button) the hub refuses `claim`. The
+runner treats that refusal as "nothing to do": it logs nothing and polls again at its normal interval, so
+it picks up work after `resume_team`. A run already in progress is not killed: it finishes (or times out)
+and updates its task as usual, since `update` stays allowed. The runner itself never hears the stop event
+(it doesn't `wait`); the headless CLI it started is not told to stop either.
+
 ## Runner output
 
 One line per event to stdout (the LaunchAgent's log): started (agent, hub), claimed #id, run started

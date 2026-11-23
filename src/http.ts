@@ -290,6 +290,14 @@ export function createHub({ store, allowedHosts = [], wiki: wikiCfg }: HubOption
     if ((m = /^\/api\/questions\/(\d+)\/answer$/.exec(path))) {
       return send(res, 200, store.answer(Number(m[1]), str(body.text, 'text')));
     }
+    if (path === '/api/pause') {
+      store.pause('owner', str(body.reason, 'reason', true) || 'owner stopped the team');
+      return send(res, 200, { ok: true });
+    }
+    if (path === '/api/resume') {
+      store.resume('owner');
+      return send(res, 200, { ok: true });
+    }
     if (path === '/api/messages') {
       store.send('owner', str(body.to, 'to'), str(body.text, 'text'));
       return send(res, 200, { ok: true });

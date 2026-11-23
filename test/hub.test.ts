@@ -126,7 +126,7 @@ describe('MCP', () => {
   test('tools, and the board as an MCP App', async () => {
     const c = await connect('claude');
     const { tools } = await c.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ['board', 'claim', 'post_task', 'send', 'set_status', 'task', 'team', 'update', 'wait']);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ['board', 'claim', 'pause_team', 'post_task', 'resume_team', 'send', 'set_status', 'task', 'team', 'update', 'wait']);
     const board = tools.find((t) => t.name === 'board')!;
     assert.equal((board._meta as { ui: { resourceUri: string } }).ui.resourceUri, BOARD_URI);
     const res = await c.readResource({ uri: BOARD_URI });
@@ -296,6 +296,41 @@ describe('paused task takeover over MCP', () => {
     await assert.rejects(call(claude, 'update', { task: t.id, note: 'back' }), /taken over by codex; coordinate with send/);
     await claude.close();
     await codex.close();
+  });
+});
+
+describe('team stop over MCP and the owner API', () => {
+  test('pause_team stops everyone, wait delivers it at once, resume_team lifts it', async () => {
+    const claude = await connect('claude');
+    const codex = await connect('codex');
+    await call(codex, 'wait', { seconds: 0 });
+    await call(claude, 'wait', { seconds: 0 });
+    assert.match(await call(claude, 'pause_team', { reason: 'owner said stop' }), /Team stopped/);
+    const started = Date.now();
+    assert.match(await call(codex, 'wait', { seconds: 30 }), /TEAM STOPPED by claude: owner said stop\./);
+    assert.ok(Date.now() - started < 5000);
+    assert.match(await call(claude, 'wait', { seconds: 0 }), /TEAM STOPPED by claude/, 'the pauser hears it too');
+    await assert.rejects(call(codex, 'claim'), /Team is stopped/);
+    await assert.rejects(call(codex, 'post_task', { title: 't', brief: 'b' }), /Team is stopped/);
+    assert.match(await call(codex, 'team'), /^STOPPED by claude at \d\d:\d\d: owner said stop/);
+    assert.match(await call(codex, 'send', { to: 'claude', text: 'checkpointed' }), /Sent/);
+    assert.match(await call(codex, 'resume_team'), /resumed/);
+    assert.match(await call(claude, 'wait', { seconds: 5 }), /Team resumed by codex/);
+    assert.match(await call(codex, 'post_task', { title: 't', brief: 'b' }), /Posted/);
+    await claude.close();
+    await codex.close();
+  });
+
+  test('the owner stops and resumes from the board API', async () => {
+    assert.equal((await ownerFetch('/api/pause', { reason: 'break' })).status, 200);
+    const st = await (await fetch(`${base}/api/state`, { headers: { authorization: `Bearer ${ownerKey}` } })).json();
+    assert.equal(st.stopped.by, 'owner');
+    assert.equal(st.stopped.reason, 'break');
+    assert.equal((await ownerFetch('/api/pause', { reason: 'again' })).status, 400);
+    assert.equal((await ownerFetch('/api/resume', {})).status, 200);
+    assert.equal((await ownerFetch('/api/resume', {})).status, 400);
+    const unauth = await fetch(`${base}/api/pause`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(unauth.status, 401);
   });
 });
 

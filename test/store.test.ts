@@ -458,6 +458,68 @@ describe('paused task takeover', () => {
   });
 });
 
+describe('team stop', () => {
+  const MIN = 60_000;
+  let now: number;
+  beforeEach(() => {
+    now = 10_000_000;
+    s.now = () => now;
+  });
+
+  test('pause tells every agent, the pauser included, and wait-style reads deliver it', () => {
+    s.pause('claude', 'owner said stop');
+    for (const a of ['claude', 'codex', 'gemini']) {
+      const { events } = s.takeInbox(a);
+      assert.equal(events.length, 1, a);
+      assert.match(eventLine(events[0], a, now), /TEAM STOPPED by claude: owner said stop\. Checkpoint now \(commit \+ push WIP, update your task note\), stop working, and end your turn\. Keep your background waiter running so the resume reaches you\. Don't call resume_team unless the owner told you to\./);
+    }
+    assert.deepEqual(s.pauseState(), { by: 'claude', reason: 'owner said stop', at: now });
+    assert.throws(() => s.pause('codex', 'again'), /Already stopped by claude/);
+    assert.throws(() => s.pause('codex', '  '), /why/);
+  });
+
+  test('while stopped, claim and post_task are refused; update, send, task and team still work', () => {
+    const t = s.postTask('claude', { title: 'Mine', brief: 'b' });
+    s.claim('codex', t.id);
+    const open = s.postTask('claude', { title: 'Open', brief: 'b' });
+    s.pause('owner', 'lunch');
+    assert.throws(() => s.claim('gemini'), /Team is stopped by owner: lunch/);
+    assert.throws(() => s.claim('gemini', open.id), /Team is stopped/);
+    assert.throws(() => s.claim('codex', t.id), /Team is stopped/);
+    assert.throws(() => s.postTask('claude', { title: 'New', brief: 'b' }), /Team is stopped/);
+    assert.equal(s.update('codex', t.id, { note: 'done A, next B' }).note, 'done A, next B');
+    s.send('codex', 'claude', 'checkpointed');
+    assert.ok(s.task(t.id));
+    assert.match(teamText(s, 'codex'), /^STOPPED by owner at \d\d:\d\d: lunch\nYou are codex\./);
+    assert.equal(s.postTask('owner', { title: 'Owner can', brief: 'b' }).posted_by, 'owner');
+  });
+
+  test('stopped time does not make tasks paused; resume refreshes them and tells everyone', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 30 * MIN;
+    s.pause('owner', 'stop');
+    now += 120 * MIN;
+    assert.equal(s.paused(s.task(t.id)!), null, 'nothing is takeable while stopped');
+    assert.equal(boardState(s).stopped?.by, 'owner');
+    for (const a of ['claude', 'codex', 'gemini']) s.takeInbox(a);
+    s.resume('claude');
+    assert.equal(s.pauseState(), null);
+    assert.equal(s.paused(s.task(t.id)!), null, 'the stopped interval does not count');
+    assert.equal(now - s.task(t.id)!.updated_at, 30 * MIN, 'age before the stop is kept');
+    now += 14 * MIN;
+    assert.equal(s.paused(s.task(t.id)!), null);
+    now += 2 * MIN;
+    assert.ok(s.paused(s.task(t.id)!), 'the timer runs again after resume, 46m in all');
+    for (const a of ['claude', 'codex', 'gemini']) {
+      assert.match(eventLine(s.takeInbox(a).events[0], a, now), /Team resumed by claude\. Call team and carry on\./, a);
+    }
+    assert.throws(() => s.resume('owner'), /isn't stopped/);
+    assert.ok(s.claim('codex', s.postTask('claude', { title: 'x', brief: 'b' }).id), 'claim works again');
+  });
+});
+
+
 test('writes from another process (the CLI) are announced', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'team-'));
   const a = new Store(join(dir, 'team.db'));

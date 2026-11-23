@@ -73,6 +73,16 @@ export interface Question {
 
 export class TeamError extends Error {}
 
+/** Prefix of the refusal while the team is stopped; the runner matches on it. */
+export const STOPPED_PREFIX = 'Team is stopped';
+
+/** The team-wide stop switch (see `pause`). */
+export interface PauseState {
+  by: string;
+  reason: string;
+  at: number;
+}
+
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const RESERVED = new Set(['all', 'owner', 'log', 'you', 'me', 'team']);
 const SESSION_DAYS = 30;
@@ -380,6 +390,8 @@ export class Store {
    */
   paused(t: Task): string | null {
     if (t.state !== 'working' || !t.claimed_by) return null;
+    // While the whole team is stopped nothing is takeable; resume refreshes the update times.
+    if (this.pauseState()) return null;
     const now = this.now();
     const a = this.db.prepare('SELECT status, resting_until FROM agents WHERE name = ?').get(t.claimed_by) as
       | { status: string; resting_until: number | null }
@@ -387,6 +399,19 @@ export class Store {
     if (a && a.status === 'resting' && (a.resting_until === null || a.resting_until > now)) return `${t.claimed_by} resting`;
     if (now - t.updated_at >= this.staleMs) return `no update ${Math.round((now - t.updated_at) / 60_000)}m`;
     return null;
+  }
+
+  /** Who stopped the team, why and when; null when it is running. */
+  pauseState(): PauseState | null {
+    const rows = this.db.prepare("SELECT key, value FROM meta WHERE key LIKE 'paused%'").all() as { key: string; value: string }[];
+    const m = new Map(rows.map((r) => [r.key, r.value]));
+    if (m.get('paused') !== '1') return null;
+    return { by: m.get('paused_by') ?? '', reason: m.get('paused_reason') ?? '', at: Number(m.get('paused_at') ?? 0) };
+  }
+
+  private requireRunning(): void {
+    const p = this.pauseState();
+    if (p) throw new TeamError(`${STOPPED_PREFIX} by ${p.by}${p.reason ? `: ${p.reason}` : ''}. Don't start anything new until the owner resumes.`);
   }
 
   openQuestions(): Question[] {
@@ -455,6 +480,7 @@ export class Store {
     const forAgent = p.for?.trim() || null;
     if (forAgent) this.requireAgent(forAgent);
     const id = this.tx(() => {
+      if (by !== 'owner') this.requireRunning();
       const now = this.now();
       const r = this.db
         .prepare('INSERT INTO tasks (goal_id, title, brief, for_agent, posted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -482,6 +508,7 @@ export class Store {
   /** Claims task `id`, or the best open task for `agent`. Returns undefined when there is nothing to take. */
   claim(agent: string, id?: number, opts: { mineOnly?: boolean } = {}): Task | undefined {
     const out = this.tx(() => {
+      this.requireRunning();
       this.back(agent);
       let t: Task | undefined;
       if (id !== undefined) {
@@ -623,6 +650,53 @@ export class Store {
     });
     this.changed();
     return out;
+  }
+
+  /**
+   * Stops the whole team: one event to every agent (the pauser included), and claim and post_task are
+   * refused until `resume`. update, send, task, team and wiki reads keep working so agents can checkpoint.
+   */
+  pause(by: string, reason: string): PauseState {
+    const why = clip(reason, 300);
+    if (!why) throw new TeamError('Say why the team is stopping.');
+    const out = this.tx(() => {
+      const cur = this.pauseState();
+      if (cur) throw new TeamError(`Already stopped by ${cur.by}${cur.reason ? `: ${cur.reason}` : ''}.`);
+      const at = this.now();
+      const set = this.db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+      set.run('paused', '1');
+      set.run('paused_by', by);
+      set.run('paused_reason', why);
+      set.run('paused_at', String(at));
+      // Sent by 'team' (a reserved name), so the one who paused hears it too.
+      this.log({
+        sender: 'team',
+        audience: 'all',
+        kind: 'pause',
+        task_id: null,
+        goal_id: null,
+        text: `TEAM STOPPED by ${by}: ${why}. Checkpoint now (commit + push WIP, update your task note), stop working, and end your turn. Keep your background waiter running so the resume reaches you. Don't call resume_team unless the owner told you to.`,
+      });
+      return { by, reason: why, at };
+    });
+    this.changed();
+    return out;
+  }
+
+  /**
+   * Lifts the stop. Working tasks' update times shift forward by the stopped interval, so it doesn't count
+   * towards the takeover timer (stale-minutes) but a task's age before the stop is kept.
+   */
+  resume(by: string): void {
+    this.tx(() => {
+      const cur = this.pauseState();
+      if (!cur) throw new TeamError("The team isn't stopped.");
+      this.db.prepare("DELETE FROM meta WHERE key LIKE 'paused%'").run();
+      const now = this.now();
+      this.db.prepare("UPDATE tasks SET updated_at = MIN(?, updated_at + ?) WHERE state = 'working'").run(now, Math.max(0, now - cur.at));
+      this.log({ sender: 'team', audience: 'all', kind: 'resume', task_id: null, goal_id: null, text: `Team resumed by ${by}. Call team and carry on.` });
+    });
+    this.changed();
   }
 
   /** Notes in the board's activity that an agent saved a wiki page. */

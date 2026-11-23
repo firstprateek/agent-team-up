@@ -1,6 +1,6 @@
 {
   "name": "agent-team-up",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "One MCP server for a team of coding agents across apps and subscriptions: goals, tasks, handoffs, questions and a live board.",
   "keywords": [
     "mcp",
