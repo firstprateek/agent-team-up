@@ -10,6 +10,7 @@
 :root {
   --bg: #f6f6f3; --card: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3dd;
   --accent: #2f5bd3; --accent-ink: #ffffff; --soft: #eef1fb; --code: #efeee9;
+  --err: #9a4d00;
   --add: #1f7a45; --add-bg: #e6f4ea; --del: #b3261e; --del-bg: #fbe9e7;
   --radius: 10px;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -18,49 +19,80 @@
 :root[data-theme="dark"] {
   --bg: #161615; --card: #1f1f1d; --ink: #ecebe6; --muted: #9c9b95; --line: #33332f;
   --accent: #7e9cf2; --accent-ink: #10131c; --soft: #232838; --code: #2a2a27;
+  --err: #f0b35a;
   --add: #6cc28f; --add-bg: #1b2b21; --del: #f0948d; --del-bg: #33201e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #161615; --card: #1f1f1d; --ink: #ecebe6; --muted: #9c9b95; --line: #33332f;
     --accent: #7e9cf2; --accent-ink: #10131c; --soft: #232838; --code: #2a2a27;
+    --err: #f0b35a;
     --add: #6cc28f; --add-bg: #1b2b21; --del: #f0948d; --del-bg: #33201e;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); }
-main { max-width: 900px; margin: 0 auto; padding: 20px 16px 48px; }
-header { display: flex; align-items: center; gap: 10px 14px; margin-bottom: 16px; flex-wrap: wrap; }
+main { max-width: 900px; margin: 0 auto; padding: 18px 16px 48px; }
+code { white-space: nowrap; font-size: 0.92em; }
+
+header { display: flex; align-items: center; gap: 8px 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
-nav { display: flex; gap: 4px; flex-wrap: wrap; }
-nav a { padding: 4px 10px; border-radius: 7px; color: var(--muted); font-size: 14px; }
+nav { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+nav a {
+  padding: 5px 10px; min-height: 36px; border-radius: 7px; color: var(--muted); font-size: 14px;
+  display: inline-flex; align-items: center;
+}
 nav a.on { background: var(--soft); color: var(--accent); font-weight: 600; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .spacer { flex: 1; }
-button, .btn { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 7px; padding: 5px 10px; cursor: pointer; }
-a.btn { text-decoration: none; display: inline-block; }
+.head-actions { display: inline-flex; align-items: center; gap: 6px; }
+button, .btn {
+  font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 7px; padding: 6px 11px; min-height: 36px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+a.btn { text-decoration: none; }
 button:hover, a.btn:hover { border-color: var(--muted); text-decoration: none; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; width: 100%; }
-.search { flex: 1; min-width: 160px; max-width: 320px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; width: 100%; min-height: 36px; }
+.search { flex: 1; min-width: 160px; max-width: 280px; }
+
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
 .stack > * + * { margin-top: 10px; }
 .small { font-size: 12px; color: var(--muted); }
 .empty { color: var(--muted); font-size: 14px; }
-.err { color: #b86e00; font-size: 13px; min-height: 1em; }
+.err { color: var(--err); font-size: 13px; }
+.err:empty { display: none; }
 .hidden { display: none !important; }
-.list { list-style: none; margin: 0; padding: 0; }
-.list li { padding: 9px 0; border-top: 1px solid var(--line); }
-.list li:first-child { border-top: 0; }
-.list .t { font-weight: 600; }
-.list .d { color: var(--muted); font-size: 14px; }
-.list .snip { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
-.chip { display: inline-block; font-size: 12px; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); margin: 0 4px 4px 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; font-size: 12px; padding: 4px 11px; min-height: 30px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted);
+}
 a.chip:hover { border-color: var(--accent); text-decoration: none; }
-.chip.on { background: var(--soft); color: var(--accent); border-color: var(--accent); }
-h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 24px 0 8px; font-weight: 600; }
+.chip.on { background: var(--soft); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+.row-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.row-chips .chip { padding: 2px 9px; min-height: 24px; font-size: 11.5px; }
+
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { padding: 10px 0; border-top: 1px solid var(--line); }
+.list li:first-child { border-top: 0; }
+.row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.row-title { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.list .t { font-weight: 600; }
+.meta-right { flex: none; margin-left: auto; }
+.list .d {
+  color: var(--muted); font-size: 14px; margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.list .snip { font-size: 13px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+
+h2.sec { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 0 8px; font-weight: 600; }
+.back-bar { margin: 0 0 2px; }
 .doc h1 { font-size: 22px; margin: 0 0 4px; }
 .doc .desc { color: var(--muted); margin: 0 0 8px; }
 .md { overflow-wrap: anywhere; }
@@ -68,25 +100,46 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
 .md h4, .md h5, .md h6 { font-size: 14px; margin: 14px 0 6px; }
 .md p { margin: 0 0 10px; }
 .md ul, .md ol { margin: 0 0 10px; padding-left: 22px; }
-.md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--code); padding: 1px 5px; border-radius: 4px; }
+.md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--code); padding: 1px 5px; border-radius: 4px; white-space: normal; }
 .md pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 0 0 10px; }
-.md pre code { background: none; padding: 0; }
+.md pre code { background: none; padding: 0; white-space: pre; }
 .md table { border-collapse: collapse; margin: 0 0 10px; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }
 .md th { background: var(--soft); }
 .broken { text-decoration: line-through; color: var(--muted); }
+
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "▸"; display: inline-block; width: 14px; font-size: 11px; flex: none; }
+details[open] > summary::before { content: "▾"; }
+.section-drawer { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 16px; }
+.section-drawer > summary { min-height: 44px; display: flex; align-items: center; font-weight: 600; color: var(--muted); }
+.section-drawer .drawer-body { padding: 4px 0 12px; }
+
 .diff { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-x: auto; padding: 8px 0; }
 .diff div { padding: 0 12px; white-space: pre; min-height: 1.5em; }
 .diff .add { background: var(--add-bg); color: var(--add); } .diff .del { background: var(--del-bg); color: var(--del); }
 .diff .hunk, .diff .meta { color: var(--muted); }
-.graph { width: 100%; height: auto; display: block; }
+
+.graph-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.graph { width: 100%; min-width: 640px; height: auto; display: block; }
 .graph line { stroke: var(--line); stroke-width: 1.2; }
 .graph circle { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
 .graph text { fill: var(--ink); font-size: 11px; }
 .graph a:hover circle, .graph a:focus circle { fill: var(--ink); }
+
 #login { max-width: 380px; margin: 12vh auto 0; }
-#login p { color: var(--muted); font-size: 14px; }
-@media (max-width: 640px) { .search { max-width: none; flex-basis: 100%; order: 5; } }
+#login p { color: var(--muted); font-size: 14px; margin: 0; }
+
+@media (max-width: 640px) {
+  nav a, button, .btn, input { min-height: 40px; }
+  .chip { min-height: 36px; padding: 6px 12px; }
+  .row-chips .chip { min-height: 30px; padding: 4px 10px; }
+  .search { max-width: none; flex-basis: 100%; order: 5; }
+  .spacer { display: none; }
+  .head-actions { margin-left: auto; }
+  #login button.primary { width: 100%; min-height: 44px; }
+}
 </style>
 </head>
 <body>
@@ -103,12 +156,16 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
 
   <div id="app" class="hidden">
     <header>
-      <h1>Team wiki</h1>
-      <nav id="nav" aria-label="Wiki"></nav>
+      <div class="head-left">
+        <h1>Team wiki</h1>
+        <nav id="nav" aria-label="Wiki"></nav>
+      </div>
       <form id="search-form" class="search" role="search"><input id="q" type="search" placeholder="Search pages" aria-label="Search pages"></form>
       <span class="spacer"></span>
-      <a class="btn" href="/board">Board</a>
-      <button id="reload" type="button">Refresh</button>
+      <div class="head-actions">
+        <a class="btn" href="/board">Board</a>
+        <button id="reload" type="button">Refresh</button>
+      </div>
     </header>
     <div id="view" class="stack"></div>
   </div>
@@ -243,18 +300,27 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
   const when = (iso) => { const d = new Date(iso); return isNaN(d) ? iso : d.toISOString().slice(0, 16).replace('T', ' '); };
 
   function pageRow(p, snip) {
+    const showSlug = p.slug !== p.title.toLowerCase();
     return h('li', {},
-      h('a', { class: 't', href: '#page/' + p.slug }, p.title), ' ', h('span', { class: 'small' }, p.slug + (p.updated ? ' · ' + p.updated : '')),
+      h('div', { class: 'row-head' },
+        h('div', { class: 'row-title' },
+          h('a', { class: 't', href: '#page/' + p.slug }, p.title),
+          showSlug ? h('span', { class: 'small' }, p.slug) : null),
+        p.updated ? h('span', { class: 'small meta-right' }, p.updated) : null),
       p.description ? h('div', { class: 'd' }, p.description) : null,
       snip ? h('div', { class: 'snip' }, snip) : null,
-      p.tags && p.tags.length ? h('div', {}, chips(p.tags)) : null);
+      p.tags && p.tags.length ? h('div', { class: 'row-chips' }, chips(p.tags)) : null);
   }
 
   function pagesView(tag) {
     const all = tag ? pages.filter((p) => p.tags.includes(tag)) : pages;
-    const tags = [...new Set(pages.flatMap((p) => p.tags))].sort();
+    const counts = new Map();
+    for (const p of pages) for (const t of p.tags) counts.set(t, (counts.get(t) || 0) + 1);
+    const tags = [...counts.keys()].sort();
     return [
-      tags.length ? h('div', {}, h('a', { class: 'chip' + (tag ? '' : ' on'), href: '#pages' }, 'all'), tags.map((t) => h('a', { class: 'chip' + (t === tag ? ' on' : ''), href: '#tag/' + encodeURIComponent(t) }, t))) : null,
+      tags.length ? h('div', { class: 'chips' },
+        h('a', { class: 'chip' + (tag ? '' : ' on'), href: '#pages' }, 'all (' + pages.length + ')'),
+        tags.map((t) => h('a', { class: 'chip' + (t === tag ? ' on' : ''), href: '#tag/' + encodeURIComponent(t) }, t + ' (' + counts.get(t) + ')'))) : null,
       h('div', { class: 'card' }, all.length ? h('ul', { class: 'list' }, all.map((p) => pageRow(p))) : h('div', { class: 'empty' }, pages.length ? 'No pages with that tag.' : 'No pages yet. Agents add them with wiki_save.')),
     ];
   }
@@ -271,21 +337,25 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
     try { p = await api('/api/wiki/page?slug=' + encodeURIComponent(slug)); }
     catch (e) { if (e.status === 404) return [h('div', { class: 'card empty' }, 'No page called ' + slug + '. ', h('a', { href: '#pages' }, 'All pages'))]; throw e; }
     const link = (x) => known.has(x) ? h('a', { href: '#page/' + x }, x) : h('span', { class: 'broken' }, x);
-    const commaList = (xs) => xs.length ? xs.flatMap((x, k) => [k ? ', ' : null, link(x)]) : h('span', { class: 'small' }, 'none');
+    const commaList = (xs) => xs.flatMap((x, k) => [k ? ', ' : null, link(x)]);
+    const hasLinks = p.linksOut.length > 0 || p.linksIn.length > 0;
+    const historyBody = p.history.length
+      ? h('ul', { class: 'list' }, p.history.map((c) => h('li', {}, h('a', { href: '#commit/' + c.sha }, c.message), h('div', { class: 'small' }, when(c.when) + ' · ' + c.author + ' · ' + c.sha.slice(0, 7)))))
+      : h('div', { class: 'empty' }, p.git ? 'No commits for this page yet.' : 'No history: the wiki folder is not a git repo.');
     return [
+      h('div', { class: 'back-bar' }, h('a', { href: '#pages', class: 'small' }, '← Pages')),
       h('div', { class: 'card doc' },
         h('h1', {}, p.meta.title),
         p.meta.description ? h('p', { class: 'desc' }, p.meta.description) : null,
-        h('div', { class: 'small' }, p.slug + (p.meta.updated ? ' · updated ' + p.meta.updated : '') + (p.meta.aliases.length ? ' · aka ' + p.meta.aliases.join(', ') : '')),
-        p.meta.tags.length ? h('div', { style: 'margin-top:6px' }, chips(p.meta.tags)) : null,
+        h('div', { class: 'small' }, p.slug + (p.meta.updated ? ' · updated ' + p.meta.updated : '')),
+        p.meta.tags.length ? h('div', { class: 'chips', style: 'margin-top:8px' }, chips(p.meta.tags)) : null,
         h('div', { style: 'margin-top:14px' }, markdown(p.body))),
-      h('div', { class: 'card' },
-        h('div', {}, h('strong', {}, 'Links to: '), commaList(p.linksOut)),
-        h('div', { style: 'margin-top:6px' }, h('strong', {}, 'Linked from: '), commaList(p.linksIn))),
-      h('h2', { class: 'sec' }, 'History'),
-      h('div', { class: 'card' }, p.history.length
-        ? h('ul', { class: 'list' }, p.history.map((c) => h('li', {}, h('a', { href: '#commit/' + c.sha }, c.message), h('div', { class: 'small' }, when(c.when) + ' · ' + c.author + ' · ' + c.sha.slice(0, 7)))))
-        : h('div', { class: 'empty' }, p.git ? 'No commits for this page yet.' : 'No history: the wiki folder is not a git repo.')),
+      hasLinks ? h('div', { class: 'card' },
+        p.linksOut.length ? h('div', {}, h('strong', {}, 'Links to: '), commaList(p.linksOut)) : null,
+        p.linksIn.length ? h('div', { style: p.linksOut.length ? 'margin-top:6px' : null }, h('strong', {}, 'Linked from: '), commaList(p.linksIn)) : null) : null,
+      h('details', { class: 'section-drawer' },
+        h('summary', {}, 'History (' + p.history.length + ')'),
+        h('div', { class: 'drawer-body' }, historyBody)),
     ];
   }
 
@@ -302,7 +372,7 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
   async function commitView(sha) {
     const c = await api('/api/wiki/commit?sha=' + encodeURIComponent(sha));
     const cls = (l) => l.startsWith('+++') || l.startsWith('---') || l.startsWith('diff ') || l.startsWith('index ') ? 'meta' : l.startsWith('@@') ? 'hunk' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : '';
-    return [h('p', {}, h('a', { href: '#changes' }, '← Recent changes')),
+    return [h('p', { class: 'back-bar' }, h('a', { href: '#changes', class: 'small' }, '← Changes')),
       h('div', { class: 'card' }, h('strong', {}, c.message), h('div', { class: 'small' }, when(c.when) + ' · ' + c.author + ' · ' + c.sha.slice(0, 7))),
       h('div', { class: 'card diff' }, c.diff.trim() ? c.diff.replace(/\n$/, '').split('\n').map((l) => h('div', { class: cls(l) }, l)) : h('div', { class: 'empty' }, 'No changes under pages/.'))];
   }
@@ -346,12 +416,12 @@ h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; col
         s('title', {}, o.p.title),
         s('circle', { cx: o.x, cy: o.y, r: 5 + Math.min(6, o.p.links.length) }),
         s('text', { x: o.x + 9, y: o.y + 4 }, o.p.slug))));
-    return [h('div', { class: 'card' }, svg), h('div', { class: 'small' }, n + ' pages, ' + edges.length + ' links. Click a dot to open the page.')];
+    return [h('div', { class: 'card graph-wrap' }, svg), h('div', { class: 'small' }, n + ' pages, ' + edges.length + ' links. Click a dot to open the page.')];
   }
 
   // ── Routing by URL hash ──
   function nav(active) {
-    $('nav').replaceChildren(...[['pages', 'Pages'], ['changes', 'Recent changes'], ['graph', 'Graph']].map(([k, label]) => h('a', { href: '#' + k, class: active === k ? 'on' : '' }, label)));
+    $('nav').replaceChildren(...[['pages', 'Pages'], ['changes', 'Changes'], ['graph', 'Graph']].map(([k, label]) => h('a', { href: '#' + k, class: active === k ? 'on' : '' }, label)));
   }
   let seq = 0;
   async function route() {
