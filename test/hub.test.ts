@@ -146,7 +146,7 @@ describe('MCP', () => {
     };
     const init = await post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'old', version: '0' } } });
     assert.equal(init.result.serverInfo.name, 'agent-team-up');
-    assert.match(init.result.instructions, /Call team first/);
+    assert.match(init.result.instructions, /team first/);
     const r = await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'team', arguments: {} } });
     assert.match(r.result.content[0].text, /^You are gemini\./);
   });
@@ -205,7 +205,7 @@ describe('MCP', () => {
     const gemini = await connect('gemini');
     const open = store.postTask('claude', { title: 'anyone', brief: 'open one' });
     const aimed = store.postTask('claude', { title: 'aimed', brief: 'for gemini', for: 'gemini' });
-    const r = await gemini.callTool({ name: 'claim', arguments: { mine_only: true } });
+    const r = await gemini.callTool({ name: 'claim', arguments: { mine_only: true, structured: true } });
     const sc = r.structuredContent as { task: Record<string, unknown> };
     assert.equal(sc.task.id, aimed.id);
     assert.equal(sc.task.state, 'working');
@@ -215,7 +215,11 @@ describe('MCP', () => {
     assert.equal(await call(gemini, 'claim', { mine_only: true }), 'Nothing open for you. Post a task, or call wait.');
     assert.equal(store.task(open.id)!.state, 'open');
 
-    const t = await claude.callTool({ name: 'task', arguments: { task: aimed.id } });
+    // Without the flag, agents get the text only.
+    const plain = await claude.callTool({ name: 'task', arguments: { task: aimed.id } });
+    assert.equal(plain.structuredContent, undefined);
+    assert.match((plain.content as { text: string }[])[0].text, /for gemini/);
+    const t = await claude.callTool({ name: 'task', arguments: { task: aimed.id, structured: true } });
     assert.match((t.content as { text: string }[])[0].text, /for gemini/);
     assert.equal((t.structuredContent as { task: { claimed_by: string } }).task.claimed_by, 'gemini');
     await assert.rejects(call(claude, 'task', { task: 99999 }), /No task/);
@@ -250,6 +254,22 @@ describe('MCP', () => {
     assert.match(await call(gemini, 'wait', { seconds: 1 }), /Nothing new/);
     assert.ok(Date.now() - started >= 900);
     await gemini.close();
+  });
+
+  test('wait with nothing keeps the Nothing new. prefix the background waiter looks for', async () => {
+    const gemini = await connect('gemini');
+    await call(gemini, 'wait', { seconds: 0 });
+    assert.equal(await call(gemini, 'wait', { seconds: 0 }), 'Nothing new.');
+    await gemini.close();
+  });
+
+  test('brief and note caps point at files instead of pasting', async () => {
+    const claude = await connect('claude');
+    await assert.rejects(call(claude, 'post_task', { title: 't', brief: 'x'.repeat(3001) }), /3000/);
+    const t = store.postTask('claude', { title: 'cap', brief: 'b' });
+    store.claim('claude', t.id);
+    await assert.rejects(call(claude, 'update', { task: t.id, note: 'x'.repeat(1501) }), /1500/);
+    await claude.close();
   });
 
   test('tool errors read as errors, not crashes', async () => {
@@ -348,6 +368,8 @@ describe('wiki', () => {
     const gemini = await wconnect('gemini');
     assert.match(await call(claude, 'wiki_search', { query: 'hub behind tailscale' }), /^hub: The hub - Where the team hub runs\n  .*tailscale/);
     assert.equal(await call(claude, 'wiki_search', { query: 'zebra' }), 'No pages match.');
+    assert.equal((await call(claude, 'wiki_search', { query: 'hub', limit: 1 })).split('\n').filter((l) => !l.startsWith('  ')).length, 1);
+    await assert.rejects(call(claude, 'wiki_search', { query: 'hub', limit: 11 }));
     const read = await call(claude, 'wiki_read', { slug: 'hub' });
     assert.match(read, /^version: [0-9a-f]{64}\nlinks to: missing\nlinked from: -\n\n---\ntitle: The hub/);
     await assert.rejects(call(claude, 'wiki_read', { slug: 'nope' }), /No page/);

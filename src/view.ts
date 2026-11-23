@@ -1,6 +1,6 @@
 // Turns store state into the short text agents read and the JSON the board draws.
 
-import type { Agent, Goal, Question, Store, Task, TeamEvent } from './store.ts';
+import { type Agent, type Goal, type Question, type Store, type Task, type TeamEvent, clip } from './store.ts';
 
 const DAY = 86_400_000;
 
@@ -18,11 +18,6 @@ export function until(ms: number, now: number): string {
   return m < 120 ? `for ${m}m more` : `for ${Math.round(m / 60)}h more`;
 }
 
-function clip(s: string, n: number): string {
-  const one = s.replace(/\s+/g, ' ').trim();
-  return one.length > n ? `${one.slice(0, n - 1)}…` : one;
-}
-
 function taskLine(t: Task, me: string): string {
   const who =
     t.claimed_by !== null
@@ -37,7 +32,7 @@ function taskLine(t: Task, me: string): string {
 
 function agentLine(a: Agent, tasks: Task[], me: string, now: number): string {
   const doing = tasks.filter((t) => t.claimed_by === a.name && t.state === 'working');
-  const parts = [`${a.name === me ? `${a.name} (you)` : a.name}${a.strengths ? ` — ${oneLine(a.strengths)}` : ''}`];
+  const parts = [`${a.name === me ? `${a.name} (you)` : a.name}${a.strengths ? ` — ${clip(a.strengths, 60)}` : ''}`];
   if (a.status === 'resting') {
     parts.push(`resting${a.resting_until ? ` ${until(a.resting_until, now)}` : ''}${a.status_note ? ` (${oneLine(a.status_note)})` : ''}`);
   } else if (doing.length) {
@@ -60,21 +55,22 @@ export function teamText(store: Store, me: string): string {
   const lines: string[] = [`You are ${me}.`, '', 'Team:'];
   for (const a of agents) lines.push(agentLine(a, tasks, me, now));
   lines.push('', goals.length ? 'Goals:' : 'Goals: none yet. The owner posts them on the board.');
-  for (const g of goals) lines.push(`- G${g.id} ${oneLine(g.title)}${g.detail ? ` — ${clip(g.detail, 160)}` : ''}`);
+  for (const g of goals) lines.push(`- G${g.id} ${oneLine(g.title)}${g.detail ? ` — ${clip(g.detail, 80)}` : ''}`);
   const mine = tasks.filter((t) => t.claimed_by === me);
   const forMe = tasks.filter((t) => t.state === 'open' && t.claimed_by === null && t.for_agent === me);
   const open = tasks.filter((t) => t.state === 'open' && t.claimed_by === null && t.for_agent === null);
-  const others = tasks.filter((t) => !mine.includes(t) && !forMe.includes(t) && !open.includes(t));
-  const section = (title: string, list: Task[]) => {
+  const others = tasks.filter((t) => t.state !== 'done' && t.state !== 'dropped' && !mine.includes(t) && !forMe.includes(t) && !open.includes(t));
+  const section = (title: string, list: Task[], cap = Infinity) => {
     if (!list.length) return;
     lines.push('', title);
-    for (const t of list) lines.push(`- ${taskLine(t, me)}`);
+    for (const t of list.slice(0, cap)) lines.push(`- ${taskLine(t, me)}`);
+    if (list.length > cap) lines.push(`- +${list.length - cap} more (task N reads one; board shows all)`);
   };
   section('Yours:', mine);
   section('Waiting for you:', forMe);
   section('Open for anyone:', open);
-  section("Teammates' tasks:", others);
-  if (!tasks.length) lines.push('', 'Tasks: none open.');
+  section("Teammates' tasks:", others, 5);
+  if (!mine.length && !forMe.length && !open.length && !others.length) lines.push('', 'Tasks: none open.');
   const mineAsked = questions.filter((q) => q.asker === me);
   lines.push('');
   if (questions.length) {

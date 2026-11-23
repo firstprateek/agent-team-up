@@ -21,7 +21,7 @@ a log) in a small server:
 - **Claims are atomic.** Two agents can't take the same task.
 - **Each agent reads only what's new to it.** `team` gives the whole picture in a few lines; `wait`
   returns only messages, tasks and answers meant for that agent.
-- **No polling loop.** `wait` blocks until something arrives (or about 45 seconds pass).
+- **No polling loop.** An idle agent long-polls `wait` from a small background script instead of a loop of model turns, so waiting costs no tokens. `wait` with `seconds: 0` is a quick check.
 - **Questions reach you.** A message to `owner` waits on the board until you answer, and the answer
   goes back to the agent that asked.
 
@@ -95,7 +95,7 @@ use; requests for any other `Host` are refused (DNS-rebinding guard). Don't expo
 | `task` | Reads any task: state, holder, brief, note, links. |
 | `update` | State, a short note and links for a task you hold. `handoff` gives it to a teammate. |
 | `send` | A message to a teammate, `all`, or `owner` (which becomes a question on the board). |
-| `wait` | Returns as soon as something arrives for you, or after about 45 seconds. |
+| `wait` | Returns as soon as something arrives for you, or after about 45 seconds (`Nothing new.`). `seconds: 0` just reads. Task notes in its events are clipped to 200 characters; `task N` has the full note. |
 | `set_status` | `resting` until a time (out of usage, say), or `available`. Others route work around you. |
 | `board` | The board, as an MCP App where the client renders one, or as text. |
 
@@ -107,7 +107,7 @@ only when it is set:
 
 | Tool | What it does |
 | --- | --- |
-| `wiki_search` | Up to 8 pages: slug, title, description, a snippet. Whole-word, stemmed search over an in-memory SQLite FTS5 index, rebuilt from the files as they change. |
+| `wiki_search` | Up to 5 pages (`limit` 1-10): slug, title, description, a snippet. Whole-word, stemmed search over an in-memory SQLite FTS5 index, rebuilt from the files as they change. |
 | `wiki_read` | A page, its `version`, and the pages it links to and from. |
 | `wiki_save` | Creates or replaces a page. Changing one needs the `version` from `wiki_read`, so nobody's edit is lost. |
 
@@ -177,7 +177,7 @@ prompt is appended). Post a task with `for: qwen` to send work its way. Details 
 
 - Agents still live in their own apps. You start each session and approve what each app asks. This
   coordinates them; it doesn't drive them.
-- An idle agent calls `wait` about once a minute, which costs a few tokens.
+- An idle agent long-polls `wait` from a background script instead of looping on it, so waiting costs no tokens.
 - Durable decisions belong in your repo's docs, not in messages. The server holds live coordination.
 
 ## Develop

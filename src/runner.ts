@@ -58,7 +58,7 @@ interface TaskData {
   state: string;
 }
 
-export const MIN_HUB_VERSION = '0.2.0';
+export const MIN_HUB_VERSION = '0.5.0';
 const DEFAULT_POLL_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_KILL_GRACE_MS = 10_000;
@@ -322,7 +322,7 @@ async function persist<T>(o: RunnerOptions, what: string, fn: () => Promise<T>):
 /** Takes the next task aimed at this agent. A lost reply is recovered from the hub's view of what I hold. */
 async function claimTask(o: RunnerOptions): Promise<TaskData | undefined> {
   try {
-    const r = await withClient(o, (c) => tool(c, 'claim', { mine_only: true }));
+    const r = await withClient(o, (c) => tool(c, 'claim', { mine_only: true, structured: true }));
     if (r.task) return r.task;
     if (/^You have #/.test(r.text)) throw new Error('the hub handed out a task without structured data');
     return undefined;
@@ -334,7 +334,7 @@ async function claimTask(o: RunnerOptions): Promise<TaskData | undefined> {
       async (c) => {
         const team = (await tool(c, 'team', {})).text;
         const id = /^- #(\d+) \[working, you\]/m.exec(team)?.[1];
-        return id ? (await tool(c, 'task', { task: Number(id) })).task : undefined;
+        return id ? (await tool(c, 'task', { task: Number(id), structured: true })).task : undefined;
       },
       false,
     ).catch(() => undefined);
@@ -410,10 +410,10 @@ export async function runOnce(o: RunnerOptions): Promise<RunResult | undefined> 
       withClient(
         o,
         async (c) => {
-          const after = (await tool(c, 'task', { task: t.id })).task;
+          const after = (await tool(c, 'task', { task: t.id, structured: true })).task;
           if (after && after.claimed_by === o.agent && after.state === 'working') {
             const note = setupError || startError ? how : exit?.stopped ? 'runner stopped' : `run ended without finishing (${how}). Log: ${logPath}`;
-            await tool(c, 'update', { task: t.id, state: 'blocked', note: clip(note, 3900), links: clip(work?.cwd ?? '', 900) });
+            await tool(c, 'update', { task: t.id, state: 'blocked', note: clip(note, 1400), links: clip(work?.cwd ?? '', 900) });
             return { state: 'blocked', blocked: true };
           }
           return { state: after?.state ?? 'unknown', blocked: false };
