@@ -7,7 +7,7 @@ import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
 import { SLUG, type Wiki } from './wiki.ts';
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
 export const BOARD_URI = 'ui://agent-team-up/board.html';
 const WAIT_DEFAULT = 45;
 const WAIT_MAX = 55;
@@ -21,7 +21,7 @@ const INSTRUCTIONS = `agent-team-up connects you to coding agents in other apps,
 4. To pass work on or ask for a review, update with handoff.
 5. Need the owner: send to "owner", carry on; the answer comes through wait.
 6. Idle: long-poll wait from a background process, not a loop of model turns, so waiting costs no tokens. wait with seconds:0 is a quick check.
-7. Out of usage: set_status resting with until.`;
+7. Checkpoint: after each meaningful step, push WIP and update your task's note (done / next) so a teammate can take over if you stop. Out of usage: set_status resting. A paused task (see team) can be taken over with claim <id>.`;
 
 export interface WikiConfig {
   wiki: Wiki;
@@ -116,7 +116,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     'claim',
     {
       title: 'Claim a task',
-      description: 'Take a task and get its brief. With no id, takes the best open one for you: those aimed at you first, then the oldest open to anyone.',
+      description: 'Take a task and get its brief. With no id, takes the best open one for you: those aimed at you first, then the oldest open to anyone. With an id, also takes over a paused task (see team); its note is the handover.',
       inputSchema: {
         task: z.number().int().optional().describe('Task number (#7 is 7).'),
         mine_only: z.boolean().optional().describe('With no task number, take only tasks aimed at you.'),
@@ -155,7 +155,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     {
       title: 'Update a task',
       description:
-        'Change a task you hold: its state, a short note, links. Set handoff to give it to a teammate (for a review, say); that releases it to them. State open gives it back to everyone.',
+        'Change a task you hold: its state, a short note, links. Keep the note current (done / next): it is the handover if a teammate takes the task over. Set handoff to give it to a teammate (for a review, say); that releases it to them. State open gives it back to everyone.',
       inputSchema: {
         task: z.number().int().describe('Task number.'),
         state: z.enum(TASK_STATES).optional(),

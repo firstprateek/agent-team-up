@@ -117,6 +117,8 @@ export class Store {
   /** Emits 'change' after every write. */
   readonly events = new EventEmitter();
   now: () => number = () => Date.now();
+  /** A working task nobody has touched for this long counts as paused (see `paused`). */
+  staleMs = 45 * 60_000;
 
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -371,6 +373,22 @@ export class Store {
       .all(recentMs > 0 ? this.now() - recentMs : Number.MAX_SAFE_INTEGER) as unknown as Task[];
   }
 
+  /**
+   * Why a task is paused, or null. Paused = working, and either its holder is resting right now or the
+   * task itself has had no update for `staleMs`. Uses the task's own update time, not the holder's
+   * last_seen: a background waiter keeps last_seen fresh after an agent runs out of usage.
+   */
+  paused(t: Task): string | null {
+    if (t.state !== 'working' || !t.claimed_by) return null;
+    const now = this.now();
+    const a = this.db.prepare('SELECT status, resting_until FROM agents WHERE name = ?').get(t.claimed_by) as
+      | { status: string; resting_until: number | null }
+      | undefined;
+    if (a && a.status === 'resting' && (a.resting_until === null || a.resting_until > now)) return `${t.claimed_by} resting`;
+    if (now - t.updated_at >= this.staleMs) return `no update ${Math.round((now - t.updated_at) / 60_000)}m`;
+    return null;
+  }
+
   openQuestions(): Question[] {
     return this.db.prepare('SELECT * FROM questions WHERE answer IS NULL ORDER BY id').all() as unknown as Question[];
   }
@@ -463,6 +481,18 @@ export class Store {
       if (id !== undefined) {
         t = this.requireTask(id);
         if (t.claimed_by === agent && t.state !== 'done' && t.state !== 'dropped') return t;
+        const why = this.paused(t);
+        if (why) {
+          // Takeover: the note and links stay as the handover.
+          const old = t.claimed_by!;
+          this.db.prepare("UPDATE tasks SET claimed_by = ?, updated_at = ? WHERE id = ? AND state = 'working' AND claimed_by = ?").run(agent, this.now(), t.id, old);
+          const text = `took over #${t.id} "${t.title}" (paused: ${why}).`;
+          this.log({ sender: agent, audience: old, kind: 'takeover', task_id: t.id, goal_id: t.goal_id, text });
+          if (t.posted_by !== old && t.posted_by !== agent) {
+            this.log({ sender: agent, audience: t.posted_by, kind: 'update', task_id: t.id, goal_id: t.goal_id, text });
+          }
+          return this.task(t.id);
+        }
         if (t.state !== 'open') throw new TeamError(`#${id} is ${t.state}${t.claimed_by ? ` (${t.claimed_by})` : ''}, so it can't be claimed.`);
         const g = t.goal_id !== null ? this.goal(t.goal_id) : undefined;
         if (g && g.state !== 'open') throw new TeamError(`#${id} belongs to goal G${g.id}, which is ${g.state}.`);
@@ -507,6 +537,10 @@ export class Store {
       const holder = t.claimed_by === by;
       const poster = t.posted_by === by;
       if (!asOwner && !holder && !(poster && t.claimed_by === null)) {
+        const took = this.db
+          .prepare("SELECT sender FROM events WHERE kind = 'takeover' AND task_id = ? AND audience = ? ORDER BY id DESC LIMIT 1")
+          .get(id, by) as { sender: string } | undefined;
+        if (took && took.sender === t.claimed_by) throw new TeamError(`#${id} was taken over by ${took.sender}; coordinate with send.`);
         throw new TeamError(
           t.claimed_by
             ? `#${id} is held by ${t.claimed_by}. Only they (or the owner) can change it; send them a message instead.`

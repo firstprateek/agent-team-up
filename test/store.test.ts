@@ -314,6 +314,94 @@ describe('review fixes', () => {
   });
 });
 
+describe('paused task takeover', () => {
+  const MIN = 60_000;
+  let now: number;
+  beforeEach(() => {
+    now = 10_000_000;
+    s.now = () => now;
+  });
+
+  test('a task is paused when its holder rests or it goes stale, not otherwise', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    assert.equal(s.paused(s.task(t.id)!), null);
+    now += 44 * MIN;
+    assert.equal(s.paused(s.task(t.id)!), null);
+    now += 2 * MIN;
+    assert.match(s.paused(s.task(t.id)!)!, /no update 46m/);
+    s.update('gemini', t.id, { note: 'still here' });
+    assert.equal(s.paused(s.task(t.id)!), null);
+    s.setStatus('gemini', 'resting', now + 10 * MIN, 'quota');
+    assert.equal(s.paused(s.task(t.id)!), 'gemini resting');
+    now += 11 * MIN;
+    assert.equal(s.paused(s.task(t.id)!), null, 'rest is over');
+    const r = s.postTask('claude', { title: 'Review', brief: 'b' });
+    s.claim('codex', r.id);
+    s.update('codex', r.id, { state: 'review' });
+    now += 90 * MIN;
+    assert.equal(s.paused(s.task(r.id)!), null, 'only working tasks pause');
+  });
+
+  test('last_seen does not keep a stale task alive', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 50 * MIN;
+    s.takeInbox('gemini'); // a background waiter touches last_seen
+    assert.ok(s.paused(s.task(t.id)!));
+  });
+
+  test('claim by id takes over a paused task, keeping note and links, and tells holder and poster', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    s.update('gemini', t.id, { note: 'done A, next B', links: 'branch x' });
+    assert.throws(() => s.claim('codex', t.id), /working \(gemini\)/);
+    s.setStatus('gemini', 'resting', now + 60 * MIN, 'quota');
+    for (const a of ['claude', 'gemini', 'codex']) s.takeInbox(a);
+    const got = s.claim('codex', t.id)!;
+    assert.deepEqual([got.claimed_by, got.state, got.note, got.links], ['codex', 'working', 'done A, next B', 'branch x']);
+    for (const who of ['gemini', 'claude']) {
+      const { events } = s.takeInbox(who);
+      assert.match(events[0].text, /took over #\d+ "Build it" \(paused: gemini resting\)/, who);
+      assert.equal(events[0].sender, 'codex');
+    }
+    assert.equal(s.takeInbox('codex').events.length, 0);
+    assert.equal(s.paused(s.task(t.id)!), null, 'the takeover freshens the task');
+  });
+
+  test('claim with no id never takes a paused task', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 60 * MIN;
+    assert.equal(s.claim('codex'), undefined);
+    assert.equal(s.task(t.id)!.claimed_by, 'gemini');
+  });
+
+  test('the old holder is told on update, and others get the usual refusal', () => {
+    const t = s.postTask('claude', { title: 'Build it', brief: 'b' });
+    s.claim('gemini', t.id);
+    now += 60 * MIN;
+    s.claim('codex', t.id);
+    assert.throws(() => s.update('gemini', t.id, { note: 'back' }), /taken over by codex; coordinate with send/);
+    assert.throws(() => s.update('claude', t.id, { note: 'x' }), /held by codex/);
+    assert.equal(s.update('codex', t.id, { note: 'mine now' }).note, 'mine now');
+  });
+
+  test('team lists paused tasks for everyone, capped at five', () => {
+    for (let i = 0; i < 7; i++) {
+      const t = s.postTask('claude', { title: `Task ${i}`, brief: 'b' });
+      s.claim('gemini', t.id);
+    }
+    assert.ok(!teamText(s, 'codex').includes('Paused'));
+    now += 50 * MIN;
+    const txt = teamText(s, 'codex');
+    assert.match(txt, /- #1 "Task 0" — paused \(no update 50m\)\. claim 1 to take over\./);
+    assert.match(txt, /- \+2 more/);
+    assert.ok(!teamText(s, 'gemini').includes('Paused:'), 'own tasks are not listed');
+    assert.equal(boardState(s).tasks[0].paused, 'no update 50m');
+  });
+});
+
 test('writes from another process (the CLI) are announced', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'team-'));
   const a = new Store(join(dir, 'team.db'));

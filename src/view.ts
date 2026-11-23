@@ -70,6 +70,12 @@ export function teamText(store: Store, me: string): string {
   section('Waiting for you:', forMe);
   section('Open for anyone:', open);
   section("Teammates' tasks:", others, 5);
+  const paused = tasks.map((t) => ({ t, why: store.paused(t) })).filter((x) => x.why && x.t.claimed_by !== me);
+  if (paused.length) {
+    lines.push('', 'Paused:');
+    for (const { t, why } of paused.slice(0, 5)) lines.push(`- #${t.id} "${clip(oneLine(t.title), 50)}" — paused (${why}). claim ${t.id} to take over.`);
+    if (paused.length > 5) lines.push(`- +${paused.length - 5} more`);
+  }
   if (!mine.length && !forMe.length && !open.length && !others.length) lines.push('', 'Tasks: none open.');
   const mineAsked = questions.filter((q) => q.asker === me);
   lines.push('');
@@ -111,14 +117,17 @@ export interface BoardState {
   now: number;
   agents: Agent[];
   goals: Goal[];
-  tasks: Task[];
+  tasks: (Task & { paused?: string })[];
   questions: Question[];
   events: TeamEvent[];
 }
 
 /** The board's data. For an agent (`viewer`), direct messages and answers meant for others are left out. */
 export function boardState(store: Store, viewer?: string): BoardState {
-  const tasks = store.tasks(DAY);
+  const tasks = store.tasks(DAY).map((t) => {
+    const why = store.paused(t);
+    return why ? { ...t, paused: why } : t;
+  });
   const used = new Set(tasks.map((t) => t.goal_id));
   const goals = store
     .goals(['open', 'done', 'dropped'])

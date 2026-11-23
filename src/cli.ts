@@ -22,6 +22,7 @@ Usage:
   agent-team-up list                          List agents.
   agent-team-up owner-key                     Make a new owner key (signs out every board).
   agent-team-up serve [--port 7600] [--host 127.0.0.1] [--allowed-host name]...
+                      [--stale-minutes 45]  a working task with no update this long counts as paused (takeable)
                       [--wiki dir] [--wiki-writers a,b,...] [--wiki-guide slug]
                                             --wiki adds wiki_search/wiki_read/wiki_save and /wiki (a folder of
                                             pages/<slug>.md; git-committed if it is a repo). --wiki-writers limits
@@ -114,6 +115,7 @@ export async function main(argv: string[]): Promise<void> {
       port: { type: 'string', default: '7600' },
       host: { type: 'string', default: '127.0.0.1' },
       'allowed-host': { type: 'string', multiple: true, default: [] },
+      'stale-minutes': { type: 'string', default: '45' },
       wiki: { type: 'string' },
       'wiki-writers': { type: 'string' },
       'wiki-guide': { type: 'string' },
@@ -187,6 +189,9 @@ export async function main(argv: string[]): Promise<void> {
       }
       case 'serve': {
         needInit();
+        const stale = Number(values['stale-minutes']);
+        if (!(stale > 0)) fail(`--stale-minutes ${values['stale-minutes']} isn't a number of minutes.`);
+        store.staleMs = stale * 60_000;
         store.watch();
         let wiki: WikiConfig | undefined;
         if (values.wiki) {
