@@ -65,15 +65,18 @@ corrections and preferences. It lives on disk (and in git), not in SQLite; see [
 | `claim` | Take a task by id, or with no id the best open one: first those meant for me, then unassigned, oldest first. Returns the brief. |
 | `update` | Change a task I hold: `state`, a `note`, `links` (PRs, branches, files). `handoff` gives it to another agent (for a review, say) and releases it. |
 | `send` | A message to an agent, to `all`, or to `owner`. To `owner` it becomes a question on the board. |
-| `wait` | Blocks until something arrives for me or `seconds` (default 45, max 55) pass. Returns the new events. |
+| `wait` | Blocks until something arrives for me or `seconds` (default 45, max 55) pass. Returns the new events; task notes in them are clipped to 200 characters. |
 | `set_status` | `available` or `resting` (with `until` and a note), so others route work around me. |
 | `wiki_search`, `wiki_read`, `wiki_save` | Only when `--wiki` is set: search, read and save the team wiki. Saves need the page's `version` and pass a privacy check. See [wiki.md](wiki.md). |
 | `board` | Shows the board (an MCP App where the client supports it; a text summary otherwise). |
 
 The server's `instructions` tell agents the loop: `team`, then `claim`, work, `update`; when idle,
-`wait`; when blocked on the owner, `send` to `owner` and carry on with something else.
+the background waiter (`wait-for-work.py`, a long-poll of `wait` that costs no tokens); when blocked on the owner, `send` to `owner` and carry on with something else.
 
-Replies are short plain text. Briefs and notes point at work (paths, branches, PRs) instead of pasting it.
+Replies are short plain text. Briefs (at most 3000 characters) and notes (1500) point at work (paths,
+branches, PRs) instead of pasting it. `team` is compact: strengths and goal details are clipped, teammates'
+open tasks capped at five, finished tasks left out (yours are always in full). `claim` and `task` return
+text only; a machine client (the runner) passes `structured: true` to also get `structuredContent`.
 
 ## Board
 
@@ -100,8 +103,8 @@ use (DNS-rebinding guard).
 
 - Agents still live in separate apps. The owner starts each session and approves what each app asks.
   agent-team-up coordinates them; it doesn't drive them.
-- `wait` returns every ~45 s because client tool timeouts differ, so an idle agent spends a few tokens
-  a minute.
+- `wait` returns every ~45 s because client tool timeouts differ. Idle agents run a background script
+  that loops on it instead, so waiting costs no tokens.
 - Only a task's holder changes it (its poster can drop or re-aim it while nobody holds it; the owner can
   do anything). Agents are models reading each other's words, so a message is a suggestion, not an order.
 - Headless agents (Qwen Code, `claude -p`, `codex exec`) can be started by `agent-team-up run`, a separate

@@ -120,6 +120,15 @@ describe('tasks', () => {
     assert.match(inbox[0].text, /handed you #\d+ "Build": PR #4 is ready/);
     assert.equal(s.claim('codex')!.id, t.id);
     assert.throws(() => s.update('codex', t.id, { handoff: 'codex' }), /yourself/);
+    // A long note is clipped in the event line, with a pointer to the full text.
+    const t2 = s.postTask('claude', { title: 'Long', brief: 'b' });
+    s.claim('claude', t2.id);
+    s.takeInbox('codex');
+    s.update('claude', t2.id, { handoff: 'codex', note: 'n'.repeat(900) });
+    const line = s.takeInbox('codex').events[0].text;
+    assert.ok(line.length < 320, `${line.length}`);
+    assert.match(line, new RegExp(`\\(task ${t2.id} for the full note\\)$`));
+    assert.equal(s.task(t2.id)!.note, 'n'.repeat(900));
     assert.throws(() => s.update('codex', t.id, { handoff: 'nobody' }), /no agent/);
   });
 
@@ -222,6 +231,21 @@ describe('status and overview', () => {
     assert.match(t, /Open for anyone:\n- #3 \[open\] Anyone/);
     assert.match(t, /Questions waiting on the owner: 1\./);
     assert.match(t, /Unread for you: 4\./);
+  });
+
+  test('team text is compact: clipped phrases, five teammate tasks, no finished ones', () => {
+    s.postGoal('Long goal', 'd'.repeat(300));
+    s.addAgent('qwen', 's'.repeat(200));
+    for (let i = 0; i < 8; i++) s.claim('gemini', s.postTask('claude', { title: `T${i}`, brief: 'b' }).id);
+    const fin = s.postTask('claude', { title: 'Finished', brief: 'b' });
+    s.claim('gemini', fin.id);
+    s.update('gemini', fin.id, { state: 'done' });
+    const t = teamText(s, 'codex');
+    assert.doesNotMatch(t, /Finished/);
+    assert.doesNotMatch(t, /s{61}/);
+    assert.doesNotMatch(t, /d{81}/);
+    assert.match(t, /- \+3 more/);
+    assert.equal(t.split('\n').filter((l) => /^- #\d+ \[working, gemini\]/.test(l)).length, 5);
   });
 });
 

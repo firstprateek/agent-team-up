@@ -97,6 +97,21 @@ export function validName(name: string): boolean {
   return NAME.test(name) && !RESERVED.has(name);
 }
 
+const NOTE_IN_EVENT = 200;
+
+/** Squeezes whitespace and cuts to `n` characters. */
+export function clip(s: string, n: number): string {
+  const one = s.replace(/\s+/g, ' ').trim();
+  return one.length > n ? `${one.slice(0, n - 1)}…` : one;
+}
+
+/** A task note as it appears in an event line: clipped, with a pointer to the full text. */
+function noteTail(note: string | null | undefined, id: number): string {
+  if (!note) return '.';
+  const short = clip(note, NOTE_IN_EVENT);
+  return `: ${short === note.trim() ? note : `${short} (task ${id} for the full note)`}`;
+}
+
 export class Store {
   readonly db: DatabaseSync;
   /** Emits 'change' after every write. */
@@ -524,7 +539,7 @@ export class Store {
           kind: 'handoff',
           task_id: id,
           goal_id: t.goal_id,
-          text: `handed you #${id} "${t.title}"${note ? `: ${note}` : '.'}`,
+          text: `handed you #${id} "${t.title}"${noteTail(note, id)}`,
         });
         return this.task(id)!;
       }
@@ -538,7 +553,7 @@ export class Store {
         audience = t.posted_by;
       }
       const verb = state !== t.state ? `moved #${id} "${t.title}" to ${state}` : `updated #${id} "${t.title}"`;
-      this.log({ sender: by, audience, kind: 'update', task_id: id, goal_id: t.goal_id, text: `${verb}${note ? `: ${note}` : '.'}${links ? ` (${links})` : ''}` });
+      this.log({ sender: by, audience, kind: 'update', task_id: id, goal_id: t.goal_id, text: `${verb}${noteTail(note, id)}${links ? ` (${links})` : ''}` });
       return this.task(id)!;
     });
     this.changed();

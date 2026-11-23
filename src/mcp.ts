@@ -7,21 +7,21 @@ import { type Store, TASK_STATES, type Task, TeamError } from './store.ts';
 import { boardState, boardText, eventLine, taskText, teamText } from './view.ts';
 import { SLUG, type Wiki } from './wiki.ts';
 
-export const VERSION = '0.4.0';
+export const VERSION = '0.5.0';
 export const BOARD_URI = 'ui://agent-team-up/board.html';
 const WAIT_DEFAULT = 45;
 const WAIT_MAX = 55;
+export const BRIEF_MAX = 3000;
+export const NOTE_MAX = 1500;
 
-const INSTRUCTIONS = `agent-team-up connects you to a team of coding agents from other apps and subscriptions, plus the owner (the human).
-How to work:
-1. Call team first. It shows your teammates and their strengths, the owner's goals and the tasks.
-2. claim a task (no id takes the best one for you; task reads any task), do it, and keep it current with update: a short note and links (branch, PR, files). Set state done when finished.
-3. Split big work with post_task. Write a brief someone in another app could start from cold: what, where, done-when. Point at files and PRs; don't paste them. Use for to aim a task at the teammate whose strengths fit.
-4. To get a review or pass work on, update with handoff set to that teammate.
-5. When you need the owner, send to "owner". It shows on their board; carry on with other work meanwhile. The answer comes back through wait.
-6. When you have nothing to do, call wait. It returns as soon as something arrives for you, or after about 45 seconds with nothing; then call it again or end your turn.
-7. If you hit your plan's usage limit, set_status resting with until, so work routes to others.
-Durable decisions and designs belong in the project's repo, not in messages.`;
+const INSTRUCTIONS = `agent-team-up connects you to coding agents in other apps, plus the owner (the human).
+1. team first: teammates, goals, tasks.
+2. claim a task (no id takes the best one), do it, keep it current with update: a short note and links (branch, PR, files). State done when finished.
+3. Split work with post_task: a brief someone could start from cold (what, where, done-when). Point at files, branches and PRs; never paste them. Use for to aim it.
+4. To pass work on or ask for a review, update with handoff.
+5. Need the owner: send to "owner", carry on; the answer comes through wait.
+6. Idle: run ~/.config/agent-team-up/wait-for-work.py <agent> in the background (it long-polls the hub at no token cost). wait with seconds:0 is a quick check.
+7. Out of usage: set_status resting with until.`;
 
 export interface WikiConfig {
   wiki: Wiki;
@@ -32,7 +32,7 @@ export interface WikiConfig {
 }
 
 function wikiLine(w: WikiConfig): string {
-  return `Wiki: before work that may have history, wiki_search. Save with wiki_save what will matter in a future session and can't be found in the code, git history or docs, with the reason; update a page instead of adding a near-duplicate; never save personal details or secrets.${w.guide ? ` Read the page ${w.guide} before your first save.` : ''}`;
+  return `Wiki: wiki_search before work that may have history. wiki_save only what will matter later and can't be found in code, git or docs, with the reason; update a page rather than add a near-duplicate; never save personal details (names, emails, usernames, employer, location) or secrets; use ~/ in paths.${w.guide ? ` Read the page ${w.guide} before your first save.` : ''}`;
 }
 
 function text(s: string) {
@@ -101,7 +101,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       description: 'Add a task to the board. The brief must stand on its own: what to do, where (paths, branches, PRs), and what done means.',
       inputSchema: {
         title: z.string().min(1).max(200).describe('Short imperative title.'),
-        brief: z.string().min(1).max(8000).describe('Everything a teammate in another app needs to start. Point at files and PRs instead of pasting them.'),
+        brief: z.string().min(1).max(BRIEF_MAX).describe(`What a teammate needs to start, at most ${BRIEF_MAX} characters. Point at files, branches and PRs instead of pasting them.`),
         goal: z.number().int().optional().describe('The goal it serves, as a number (G3 is 3).'),
         for: z.string().optional().describe('A teammate to aim it at. Leave out to let anyone take it.'),
       },
@@ -120,12 +120,14 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       inputSchema: {
         task: z.number().int().optional().describe('Task number (#7 is 7).'),
         mine_only: z.boolean().optional().describe('With no task number, take only tasks aimed at you.'),
+        structured: z.boolean().optional().describe('Machine clients only: also return the task as structuredContent.'),
       },
     },
-    guard((a: { task?: number; mine_only?: boolean }) => {
+    guard((a: { task?: number; mine_only?: boolean; structured?: boolean }) => {
       const t = store.claim(me, a.task, { mineOnly: a.mine_only });
       if (!t) return text('Nothing open for you. Post a task, or call wait.');
-      return { ...text(`You have #${t.id}. Keep it current with update.\n\n${taskText(t, me)}`), structuredContent: taskData(t) };
+      const r = text(`You have #${t.id}. Keep it current with update.\n\n${taskText(t, me)}`);
+      return a.structured ? { ...r, structuredContent: taskData(t) } : r;
     }),
   );
 
@@ -134,13 +136,17 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     {
       title: 'Read a task',
       description: 'A task\'s state, holder, brief, note and links. Read-only; any task.',
-      inputSchema: { task: z.number().int().describe('Task number (#7 is 7).') },
+      inputSchema: {
+        task: z.number().int().describe('Task number (#7 is 7).'),
+        structured: z.boolean().optional().describe('Machine clients only: also return the task as structuredContent.'),
+      },
       annotations: { readOnlyHint: true },
     },
-    guard((a: { task: number }) => {
+    guard((a: { task: number; structured?: boolean }) => {
       const t = store.task(a.task);
       if (!t) return fail(`No task #${a.task}.`);
-      return { ...text(taskText(t, me)), structuredContent: taskData(t) };
+      const r = text(taskText(t, me));
+      return a.structured ? { ...r, structuredContent: taskData(t) } : r;
     }),
   );
 
@@ -153,7 +159,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       inputSchema: {
         task: z.number().int().describe('Task number.'),
         state: z.enum(TASK_STATES).optional(),
-        note: z.string().max(4000).optional().describe('What changed, in a sentence or two. Replaces the previous note.'),
+        note: z.string().max(NOTE_MAX).optional().describe(`What changed, in a sentence or two, at most ${NOTE_MAX} characters. Point at files or commits instead of pasting. Replaces the previous note.`),
         links: z.string().max(1000).optional().describe('Branch, PR, files. Replaces the previous links.'),
         handoff: z.string().optional().describe('Teammate to hand the task to.'),
       },
@@ -187,7 +193,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     'wait',
     {
       title: 'Wait for news',
-      description: `Returns as soon as something arrives for you (a message, a task aimed at you, a handoff, an answer, a new goal), or after ${WAIT_DEFAULT} seconds with nothing. Reading moves you past those messages.`,
+      description: `Returns when something arrives for you (message, task, handoff, answer, goal), or after ${WAIT_DEFAULT} s with nothing. seconds 0 is a quick check. Reading moves you past those messages.`,
       inputSchema: {
         seconds: z.number().int().min(0).max(WAIT_MAX).optional().describe(`How long to wait, at most ${WAIT_MAX}. 0 just reads.`),
       },
@@ -203,10 +209,10 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
       // Nobody is listening any more: leave the messages for the next wait.
       if (signal.aborted) return text('Cancelled.');
       const { events, more } = store.takeInbox(me);
-      if (!events.length) return text('Nothing new. Call wait again, or end your turn if you are done.');
+      if (!events.length) return text('Nothing new.');
       const now = store.now();
       const lines = events.map((e) => eventLine(e, me, now));
-      if (more) lines.push(`…and ${more} more. Call wait again to read them.`);
+      if (more) lines.push(`…and ${more} more; wait again to read them.`);
       return text(lines.join('\n'));
     }),
   );
@@ -265,12 +271,15 @@ function registerWiki(server: McpServer, store: Store, me: string, cfg: WikiConf
     'wiki_search',
     {
       title: 'Search the wiki',
-      description: 'Search the team wiki. Returns up to 8 pages: slug, title, description and a snippet.',
-      inputSchema: { query: z.string().min(1).max(300).describe('A few words.') },
+      description: 'Search the team wiki. Returns up to 5 pages (limit 1-10): slug, title, description and a snippet.',
+      inputSchema: {
+        query: z.string().min(1).max(300).describe('A few words.'),
+        limit: z.number().int().min(1).max(10).optional().describe('How many pages, default 5.'),
+      },
       annotations: { readOnlyHint: true },
     },
-    guard((a: { query: string }) => {
-      const hits = wiki.search(a.query);
+    guard((a: { query: string; limit?: number }) => {
+      const hits = wiki.search(a.query, a.limit ?? 5);
       if (!hits.length) return text('No pages match.');
       return text(hits.map((h) => `${h.slug}: ${h.title} - ${h.description}${h.snippet ? `\n  ${h.snippet}` : ''}`).join('\n'));
     }),
@@ -297,7 +306,7 @@ function registerWiki(server: McpServer, store: Store, me: string, cfg: WikiConf
     {
       title: 'Save a wiki page',
       description:
-        'Create a page or replace one. content is the whole page, starting with frontmatter (title, description, optional tags and aliases); link pages with [[slug]]. To change an existing page, wiki_read it first and pass its version. No personal details, emails, home paths or secrets.',
+        'Create or replace a page. content is the whole page, starting with frontmatter (title, description, optional tags and aliases); link with [[slug]]. To change a page, wiki_read it first and pass its version. No personal details or secrets.',
       inputSchema: {
         slug: slugArg,
         content: z.string().min(1).max(40 * 1024).describe('The whole page, frontmatter included. At most 40 KB.'),
