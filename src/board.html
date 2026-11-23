@@ -10,7 +10,8 @@
 :root {
   --bg: #f6f6f3; --card: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3dd;
   --accent: #2f5bd3; --accent-ink: #ffffff; --soft: #eef1fb;
-  --open: #6b6b66; --working: #2f5bd3; --review: #7b4bc4; --blocked: #b86e00; --done: #2e7d4f; --dropped: #9a9a94;
+  --open: #6b6b66; --working: #2f5bd3; --review: #7b4bc4; --blocked: #9a4d00; --done: #2e7d4f; --dropped: #9a9a94;
+  --err: #9a4d00;
   --warn-bg: #fff5e0; --warn-line: #f0d9a8;
   --radius: 10px;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -20,6 +21,7 @@
   --bg: #161615; --card: #1f1f1d; --ink: #ecebe6; --muted: #9c9b95; --line: #33332f;
   --accent: #7e9cf2; --accent-ink: #10131c; --soft: #232838;
   --open: #9c9b95; --working: #7e9cf2; --review: #b393ea; --blocked: #e0a648; --done: #6cc28f; --dropped: #6d6d68;
+  --err: #f0b35a;
   --warn-bg: #2d2617; --warn-line: #574622;
 }
 @media (prefers-color-scheme: dark) {
@@ -27,76 +29,129 @@
     --bg: #161615; --card: #1f1f1d; --ink: #ecebe6; --muted: #9c9b95; --line: #33332f;
     --accent: #7e9cf2; --accent-ink: #10131c; --soft: #232838;
     --open: #9c9b95; --working: #7e9cf2; --review: #b393ea; --blocked: #e0a648; --done: #6cc28f; --dropped: #6d6d68;
+    --err: #f0b35a;
     --warn-bg: #2d2617; --warn-line: #574622;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); }
 body.app { background: transparent; }
-main { max-width: 980px; margin: 0 auto; padding: 20px 16px 48px; }
+main { max-width: 980px; margin: 0 auto; padding: 18px 16px 48px; }
 body.app main { padding: 12px; }
-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+code { white-space: nowrap; font-size: 0.92em; }
+
+header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.brand { display: inline-flex; align-items: center; gap: 10px; margin-right: auto; }
 h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 24px 0 8px; font-weight: 600; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 0 8px; font-weight: 600; }
 .live { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dropped); }
 .live.on::before { background: var(--done); }
+.actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .spacer { flex: 1; }
-a.btn { text-decoration: none; display: inline-block; }
-button, .btn { font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 7px; padding: 5px 10px; cursor: pointer; }
-button:hover { border-color: var(--muted); }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-input, textarea, select { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; width: 100%; }
-textarea { resize: vertical; min-height: 60px; }
+
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+button, .btn {
+  font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 7px; padding: 6px 11px; min-height: 36px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+button:hover, .btn:hover { border-color: var(--muted); }
+button.active { background: var(--soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button:focus-visible, .btn:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input, textarea, select { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; width: 100%; }
+textarea { resize: vertical; min-height: 64px; }
+
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .stack > * + * { margin-top: 10px; }
-.team { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-.agent .name { font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.row { display: flex; gap: 8px; align-items: center; }
+
+.compose { margin-bottom: 14px; }
+.compose form > * + * { margin-top: 8px; }
+
+.team { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.agent-pill {
+  display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  font-size: 13px; max-width: 100%;
+}
+.agent-pill .name { font-weight: 600; flex: none; }
+.agent-pill .state { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.agent-pill .seen { color: var(--muted); font-size: 12px; flex: none; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dropped); flex: none; }
 .dot.busy { background: var(--working); } .dot.free { background: var(--done); } .dot.resting { background: var(--blocked); }
-.agent .what { font-size: 13px; margin-top: 4px; }
+
 .small { font-size: 12px; color: var(--muted); }
 .question { background: var(--warn-bg); border-color: var(--warn-line); }
+.question .qtext { margin-top: 3px; }
 .question .row { display: flex; gap: 8px; margin-top: 8px; align-items: flex-start; }
-.question textarea { min-height: 38px; }
-.goal-head { display: flex; align-items: baseline; gap: 10px; }
-.goal-head .title { font-weight: 600; flex: 1; }
+.question textarea { min-height: 40px; }
+.blocked-title { font-weight: 600; margin-top: 2px; }
+
+.goal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.goal-head .title { font-weight: 600; flex: 1 1 220px; min-width: 0; }
+.goal-meta { display: inline-flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
 .bar { height: 4px; border-radius: 2px; background: var(--line); margin: 8px 0 4px; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--done); }
+
 .tasks { list-style: none; padding: 0; margin: 6px 0 0; }
-.tasks li { display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.tasks li { display: grid; grid-template-columns: 40px 1fr auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); align-items: baseline; }
 .tasks li:first-child { border-top: 0; }
 .tasks .id { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
 .tasks .t { min-width: 0; }
-.tasks .note { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.tasks .note {
+  font-size: 12px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tasks .note.clickable { cursor: pointer; }
+.tasks .note.expanded { display: block; -webkit-line-clamp: unset; }
+.tasks .links { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 .tasks .who { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
+
 .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; margin-right: 6px; text-transform: lowercase; }
 .s-open { color: var(--open); } .s-working { color: var(--working); } .s-review { color: var(--review); }
 .s-blocked { color: var(--blocked); } .s-done { color: var(--done); } .s-dropped { color: var(--dropped); }
 li.done .title, li.dropped .title { color: var(--muted); }
 li.dropped .title { text-decoration: line-through; }
-details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
-details[open] summary { margin-bottom: 8px; }
+
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details summary::before { content: "▸"; display: inline-block; width: 14px; font-size: 11px; flex: none; }
+details[open] > summary::before { content: "▾"; }
+.done-toggle { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.done-toggle > summary { min-height: 36px; display: flex; align-items: center; }
+.section-drawer { margin-top: 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 14px; }
+.section-drawer > summary { min-height: 44px; display: flex; align-items: center; font-weight: 600; color: var(--muted); }
+.section-drawer .drawer-body { padding: 4px 0 12px; }
+
 .feed { list-style: none; padding: 0; margin: 0; font-size: 13px; }
-.feed li { padding: 5px 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: 48px 1fr; gap: 8px; }
+.feed li { padding: 6px 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: 48px 1fr; gap: 8px; }
 .feed li:first-child { border-top: 0; }
 .feed li.more { display: block; }
 .feed .when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .feed .from { font-weight: 600; }
-.feed li.question-ev, .feed li.answer-ev { background: var(--warn-bg); }
-.forms { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.forms form > * + * { margin-top: 8px; }
-.forms .row { display: flex; gap: 8px; }
+.feed li.question-ev, .feed li.answer-ev { background: var(--warn-bg); padding-inline: 6px; border-radius: 5px; }
+
 .empty { color: var(--muted); font-size: 14px; }
-.err { color: var(--blocked); font-size: 13px; min-height: 1em; }
+.err { color: var(--err); font-size: 13px; }
+.err:empty { display: none; }
 #login { max-width: 380px; margin: 12vh auto 0; }
-#login p { color: var(--muted); font-size: 14px; }
+#login p { color: var(--muted); font-size: 14px; margin: 0; }
 .hidden { display: none !important; }
+
 @media (max-width: 640px) {
-  .forms { grid-template-columns: 1fr; }
-  .tasks li { grid-template-columns: 36px 1fr; }
-  .tasks .who { grid-column: 2; text-align: left; }
+  button, .btn { min-height: 40px; }
+  .done-toggle > summary, .section-drawer > summary { min-height: 44px; }
+  .actions { width: 100%; }
+  .agent-pill { max-width: 100%; }
+  .agent-pill .state { max-width: 200px; }
+  .question .row { flex-direction: column; }
+  .question .row button.primary { width: 100%; min-height: 42px; }
+  .tasks li { grid-template-columns: auto 1fr; gap: 3px 8px; }
+  .tasks .id { grid-column: 1; grid-row: 1; }
+  .tasks .who { grid-column: 2; grid-row: 1; text-align: right; }
+  .tasks .t { grid-column: 1 / -1; grid-row: 2; }
+  #login button.primary { width: 100%; min-height: 44px; }
 }
 </style>
 </head>
@@ -114,46 +169,58 @@ details[open] summary { margin-bottom: 8px; }
 
   <div id="board" class="hidden">
     <header>
-      <h1>Team board</h1>
-      <span id="live" class="live">offline</span>
-      <span class="spacer"></span>
-      <a id="wiki-link" class="btn hidden" href="/wiki">Wiki</a>
-      <button id="refresh" type="button" class="hidden">Refresh</button>
-      <button id="logout" type="button" class="hidden">Sign out</button>
+      <div class="brand">
+        <h1>Team board</h1>
+        <span id="live" class="live">offline</span>
+      </div>
+      <div class="actions">
+        <button id="btn-goal" type="button" class="hidden" aria-expanded="false">+ Goal</button>
+        <button id="btn-msg" type="button" class="hidden" aria-expanded="false">Message</button>
+        <a id="wiki-link" class="btn hidden" href="/wiki">Wiki</a>
+        <button id="refresh" type="button" class="hidden">Refresh</button>
+        <button id="logout" type="button" class="hidden">Sign out</button>
+      </div>
     </header>
 
-    <section id="team" class="team" aria-label="Team"></section>
+    <section id="compose" class="compose stack hidden" aria-label="Post">
+      <form id="goal-form" class="card hidden">
+        <input name="title" placeholder="New goal" aria-label="Goal title" required maxlength="200">
+        <textarea name="detail" placeholder="What done looks like (optional)" aria-label="Goal detail"></textarea>
+        <div class="row">
+          <span class="spacer"></span>
+          <button type="button" class="cancel-compose">Cancel</button>
+          <button class="primary" type="submit">Post goal</button>
+        </div>
+      </form>
+      <form id="msg-form" class="card hidden">
+        <select name="to" aria-label="Send to"></select>
+        <textarea name="text" placeholder="Message" aria-label="Message" required></textarea>
+        <div class="row">
+          <span class="spacer"></span>
+          <button type="button" class="cancel-compose">Cancel</button>
+          <button class="primary" type="submit">Send</button>
+        </div>
+      </form>
+      <div class="err" id="form-err" role="alert"></div>
+    </section>
 
     <section id="needs" class="hidden">
       <h2>Needs you</h2>
-      <div id="questions" class="stack"></div>
+      <div id="needs-list" class="stack"></div>
     </section>
+
+    <section id="team" class="team" aria-label="Team"></section>
 
     <section>
       <h2>Goals</h2>
       <div id="goals" class="stack"></div>
     </section>
 
-    <section id="owner-forms" class="hidden">
-      <h2>Post</h2>
-      <div class="forms">
-        <form id="goal-form" class="card">
-          <input name="title" placeholder="New goal" aria-label="Goal title" required maxlength="200">
-          <textarea name="detail" placeholder="What done looks like (optional)" aria-label="Goal detail"></textarea>
-          <div class="row"><span class="spacer"></span><button class="primary" type="submit">Post goal</button></div>
-        </form>
-        <form id="msg-form" class="card">
-          <select name="to" aria-label="Send to"></select>
-          <textarea name="text" placeholder="Message" aria-label="Message" required></textarea>
-          <div class="row"><span class="spacer"></span><button class="primary" type="submit">Send</button></div>
-        </form>
-      </div>
-      <div class="err" id="form-err" role="alert"></div>
-    </section>
-
     <section>
-      <h2>Activity</h2>
-      <div class="card"><ul id="feed" class="feed"></ul></div>
+      <details id="activity-details" class="section-drawer">
+        <summary id="activity-summary">Activity (0)</summary>
+        <div class="drawer-body"><ul id="feed" class="feed"></ul></div>
+      </details>
     </section>
   </div>
 </main>
@@ -164,6 +231,9 @@ details[open] summary { margin-bottom: 8px; }
   const $ = (id) => document.getElementById(id);
   let state = null;
   let clockSkew = 0;
+  let composeMode = null;
+  const openDrawers = new Set();
+  const questionDrafts = new Map();
 
   // ── DOM helpers (all text goes in as text, never as HTML) ──
   function h(tag, attrs, ...kids) {
@@ -190,6 +260,31 @@ details[open] summary { margin-bottom: 8px; }
     const d = new Date(ms);
     return now() - ms < 86400000 ? d.toTimeString().slice(0, 5) : d.toISOString().slice(5, 10);
   }
+  function drawer(key, cls, summaryText, ...body) {
+    return h('details', {
+      class: cls,
+      open: openDrawers.has(key),
+      ontoggle: (e) => {
+        if (!e.currentTarget.isConnected) return;
+        if (e.currentTarget.open) openDrawers.add(key); else openDrawers.delete(key);
+      },
+    }, h('summary', {}, summaryText), ...body);
+  }
+
+  function setCompose(mode) {
+    composeMode = mode;
+    $('form-err').textContent = '';
+    const open = mode !== null;
+    $('compose').classList.toggle('hidden', !open);
+    $('goal-form').classList.toggle('hidden', mode !== 'goal');
+    $('msg-form').classList.toggle('hidden', mode !== 'msg');
+    $('btn-goal').classList.toggle('active', mode === 'goal');
+    $('btn-msg').classList.toggle('active', mode === 'msg');
+    $('btn-goal').setAttribute('aria-expanded', String(mode === 'goal'));
+    $('btn-msg').setAttribute('aria-expanded', String(mode === 'msg'));
+    if (mode === 'goal') $('goal-form').elements.title.focus();
+    else if (mode === 'msg') $('msg-form').elements.text.focus();
+  }
 
   // ── Rendering ──
   function render(s) {
@@ -200,82 +295,157 @@ details[open] summary { margin-bottom: 8px; }
     $('board').classList.remove('hidden');
     $('wiki-link').classList.toggle('hidden', !(s.wiki && !inApp));
 
+    const goalById = new Map(s.goals.map((g) => [g.id, g]));
+    const blockedTasks = s.tasks.filter((t) => t.state === 'blocked');
+
+    // 1. Needs you (open questions + blocked tasks)
+    $('needs').classList.toggle('hidden', s.questions.length === 0 && blockedTasks.length === 0);
+    const questionCards = s.questions.map((q) => {
+      const box = h('textarea', {
+        'aria-label': 'Answer to Q' + q.id,
+        placeholder: 'Your answer',
+        oninput: (e) => { questionDrafts.set(q.id, e.target.value); },
+      });
+      if (questionDrafts.has(q.id)) box.value = questionDrafts.get(q.id);
+      const err = h('div', { class: 'err', role: 'alert' });
+      const form = h('form', { class: 'row', onsubmit: async (e) => {
+        e.preventDefault();
+        if (!box.value.trim()) return;
+        try {
+          await post('/api/questions/' + q.id + '/answer', { text: box.value });
+          questionDrafts.delete(q.id);
+        } catch (x) { err.textContent = x.message; }
+      } }, box, h('button', { class: 'primary', type: 'submit' }, 'Answer'));
+      return h('div', { class: 'card question' },
+        h('div', { class: 'small' }, 'Q' + q.id + ' from ' + q.asker + (q.task_id ? ' about #' + q.task_id : '') + ' · ' + ago(q.asked_at)),
+        h('div', { class: 'qtext' }, q.text),
+        inApp ? null : form, err);
+    });
+    const blockedCards = blockedTasks.map((t) => {
+      const who = t.claimed_by || (t.for_agent ? 'for ' + t.for_agent : null);
+      const g = t.goal_id !== null ? goalById.get(t.goal_id) : null;
+      const meta = ['Blocked', '#' + t.id, g ? 'G' + g.id : null, who].filter(Boolean).join(' · ');
+      return h('div', { class: 'card question' },
+        h('div', { class: 'small' }, meta),
+        h('div', { class: 'blocked-title' }, t.title),
+        t.note ? h('div', { class: 'small qtext' }, t.note) : null,
+        t.links ? h('div', { class: 'small' }, t.links) : null);
+    });
+    $('needs-list').replaceChildren(...questionCards, ...blockedCards);
+
+    // 2. Compact team strip
     const busy = (name) => s.tasks.filter((t) => t.claimed_by === name && t.state === 'working');
     $('team').replaceChildren(...(s.agents.length ? s.agents.map((a) => {
       const doing = busy(a.name);
       const away = !a.last_seen || now() - a.last_seen > 15 * 60000;
       const kind = a.status === 'resting' ? 'resting' : doing.length ? 'busy' : away ? 'away' : 'free';
-      const what = a.status === 'resting'
-        ? 'Resting' + (a.resting_until ? ' until ' + new Date(a.resting_until).toTimeString().slice(0, 5) : '') + (a.status_note ? ': ' + a.status_note : '')
-        : doing.length ? doing.map((t) => '#' + t.id + ' ' + t.title).join(', ') : away ? (a.last_seen ? 'Away' : 'Not connected yet') : 'Free';
-      return h('div', { class: 'card agent' },
-        h('div', { class: 'name' }, h('span', { class: 'dot ' + kind, 'aria-hidden': 'true' }), a.name),
-        h('div', { class: 'what' }, what),
-        h('div', { class: 'small' }, (a.strengths ? a.strengths + ' · ' : '') + 'seen ' + ago(a.last_seen)));
+      const stateLabel = a.status === 'resting'
+        ? 'Resting' + (a.resting_until ? ' until ' + clock(a.resting_until) : '')
+        : doing.length
+          ? '#' + doing[0].id + ' ' + doing[0].title + (doing.length > 1 ? ' (+' + (doing.length - 1) + ')' : '')
+          : away ? (a.last_seen ? 'Away' : 'Offline') : 'Free';
+      const tip = [
+        a.name + ': ' + (doing.length ? doing.map((t) => '#' + t.id + ' ' + t.title).join(', ') : stateLabel),
+        a.status === 'resting' && a.status_note ? a.status_note : null,
+        a.strengths ? a.strengths : null,
+        'seen ' + ago(a.last_seen),
+      ].filter(Boolean).join('\n');
+      return h('div', { class: 'agent-pill', title: tip },
+        h('span', { class: 'dot ' + kind, 'aria-hidden': 'true' }),
+        h('span', { class: 'name' }, a.name),
+        h('span', { class: 'state' }, stateLabel),
+        (away || a.status === 'resting') && a.last_seen ? h('span', { class: 'seen' }, ago(a.last_seen)) : null);
     }) : [h('div', { class: 'empty' }, 'No agents yet. Add one with agent-team-up add <name>.')]));
 
-    $('needs').classList.toggle('hidden', s.questions.length === 0);
-    $('questions').replaceChildren(...s.questions.map((q) => {
-      const box = h('textarea', { 'aria-label': 'Answer to Q' + q.id, placeholder: 'Your answer' });
-      const err = h('div', { class: 'err', role: 'alert' });
-      const form = h('form', { class: 'row', onsubmit: async (e) => {
-        e.preventDefault();
-        if (!box.value.trim()) return;
-        try { await post('/api/questions/' + q.id + '/answer', { text: box.value }); } catch (x) { err.textContent = x.message; }
-      } }, box, h('button', { class: 'primary', type: 'submit' }, 'Answer'));
-      return h('div', { class: 'card question' },
-        h('div', { class: 'small' }, 'Q' + q.id + ' from ' + q.asker + (q.task_id ? ' about #' + q.task_id : '') + ' · ' + ago(q.asked_at)),
-        h('div', {}, q.text),
-        inApp ? null : form, err);
-    }));
-
-    const goalCard = (g, tasks) => {
-      const done = tasks.filter((t) => t.state === 'done').length;
-      const live = tasks.filter((t) => t.state !== 'dropped').length;
-      return h('div', { class: 'card' },
-        h('div', { class: 'goal-head' },
-          h('span', { class: 'title' }, g ? 'G' + g.id + ' ' + g.title : 'No goal'),
-          g && g.state !== 'open' ? h('span', { class: 'pill s-done' }, g.state) : null,
-          h('span', { class: 'small' }, done + '/' + live + ' done'),
-          g && g.state === 'open' && !inApp ? h('button', { type: 'button', onclick: () => post('/api/goals/' + g.id, { state: 'done' }).catch(alertErr) }, 'Mark done') : null),
-        g && g.detail ? h('div', { class: 'small' }, g.detail) : null,
-        live ? h('div', { class: 'bar' }, h('span', { style: 'width:' + Math.round((done / live) * 100) + '%' })) : null,
-        tasks.length ? h('ul', { class: 'tasks' }, tasks.map(taskRow)) : h('div', { class: 'empty small' }, 'No tasks yet. An agent will break it down.'));
-    };
+    // 3. Active-first Goals
+    const rank = { blocked: 0, review: 1, working: 2, open: 3 };
+    const isClosed = (t) => t.state === 'done' || t.state === 'dropped';
+    const sortActive = (list) => list.slice().sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9) || a.id - b.id);
     const taskRow = (t) => h('li', { class: t.state },
       h('span', { class: 'id' }, '#' + t.id),
       h('div', { class: 't' },
         h('span', { class: 'pill s-' + t.state }, t.state),
         h('span', { class: 'title' }, t.title),
-        t.note ? h('div', { class: 'note' }, t.note) : null,
-        t.links ? h('div', { class: 'note' }, t.links) : null),
+        t.note ? h('div', {
+          class: 'note clickable',
+          title: 'Click to expand',
+          onclick: (e) => e.currentTarget.classList.toggle('expanded'),
+        }, t.note) : null,
+        t.links ? h('div', { class: 'links' }, t.links) : null),
       h('span', { class: 'who' }, t.claimed_by || (t.for_agent ? 'for ' + t.for_agent : 'anyone')));
 
-    const cards = s.goals.map((g) => goalCard(g, s.tasks.filter((t) => t.goal_id === g.id)));
-    const loose = s.tasks.filter((t) => t.goal_id === null || !s.goals.some((g) => g.id === t.goal_id));
-    if (loose.length) cards.push(goalCard(null, loose));
-    $('goals').replaceChildren(...(cards.length ? cards : [h('div', { class: 'empty' }, inApp ? 'No goals yet.' : 'No goals yet. Post one below.')]));
+    const goalCard = (g, tasks) => {
+      const done = tasks.filter((t) => t.state === 'done').length;
+      const live = tasks.filter((t) => t.state !== 'dropped').length;
+      const active = sortActive(tasks.filter((t) => !isClosed(t)));
+      const closed = tasks.filter(isClosed);
+      const isOpen = g.state === 'open';
+      const body = !isOpen
+        ? (tasks.length ? [h('ul', { class: 'tasks' }, tasks.map(taskRow))] : [h('div', { class: 'empty small' }, 'No tasks.')])
+        : [
+            active.length
+              ? h('ul', { class: 'tasks' }, active.map(taskRow))
+              : h('div', { class: 'empty small' }, tasks.length ? 'All tasks finished.' : 'No tasks yet. An agent will break it down.'),
+            closed.length ? drawer('goal-done-' + g.id, 'done-toggle', 'Completed (' + closed.length + ')', h('ul', { class: 'tasks' }, closed.map(taskRow))) : null,
+          ];
+      return h('div', { class: 'card' },
+        h('div', { class: 'goal-head' },
+          h('span', { class: 'title' }, 'G' + g.id + ' ' + g.title),
+          h('span', { class: 'goal-meta' },
+            !isOpen ? h('span', { class: 'pill s-done' }, g.state) : null,
+            h('span', { class: 'small' }, done + '/' + live + ' done'),
+            isOpen && !inApp ? h('button', { type: 'button', onclick: () => post('/api/goals/' + g.id, { state: 'done' }).catch(alertErr) }, 'Mark done') : null)),
+        g.detail ? h('div', { class: 'small' }, g.detail) : null,
+        live ? h('div', { class: 'bar' }, h('span', { style: 'width:' + Math.round((done / live) * 100) + '%' })) : null,
+        ...body);
+    };
+
+    const looseCard = (tasks) => {
+      const active = sortActive(tasks.filter((t) => !isClosed(t)));
+      const closed = tasks.filter(isClosed);
+      return h('div', { class: 'card' },
+        h('div', { class: 'goal-head' },
+          h('span', { class: 'title' }, 'Tasks'),
+          h('span', { class: 'goal-meta' }, h('span', { class: 'small' }, active.length + ' active'))),
+        active.length ? h('ul', { class: 'tasks' }, active.map(taskRow)) : null,
+        closed.length ? drawer('loose-done', 'done-toggle', 'Completed (' + closed.length + ')', h('ul', { class: 'tasks' }, closed.map(taskRow))) : null);
+    };
+
+    const openGoals = s.goals.filter((g) => g.state === 'open');
+    const closedGoals = s.goals.filter((g) => g.state !== 'open');
+    const loose = s.tasks.filter((t) => t.goal_id === null || !goalById.has(t.goal_id));
+    const cards = openGoals.map((g) => goalCard(g, s.tasks.filter((t) => t.goal_id === g.id)));
+    if (loose.length) cards.push(looseCard(loose));
+    if (closedGoals.length) {
+      cards.push(drawer('closed-goals', 'section-drawer', 'Completed goals (' + closedGoals.length + ')',
+        h('div', { class: 'drawer-body stack' }, closedGoals.map((g) => goalCard(g, s.tasks.filter((t) => t.goal_id === g.id))))));
+    }
+    $('goals').replaceChildren(...(cards.length ? cards : [h('div', { class: 'empty' }, inApp ? 'No goals yet.' : 'No goals yet. Use + Goal above.')]));
 
     const to = document.querySelector('#msg-form select');
     const pick = to.value;
     to.replaceChildren(h('option', { value: 'all' }, 'Everyone'), ...s.agents.map((a) => h('option', { value: a.name }, a.name)));
     if ([...to.options].some((o) => o.value === pick)) to.value = pick;
 
+    // 4. Activity feed inside collapsed drawer
     const evRow = (e) => {
-      const to = e.kind === 'message' || e.kind === 'handoff' ? ' → ' + e.audience : '';
+      const toWho = e.kind === 'message' || e.kind === 'handoff' ? ' → ' + e.audience : '';
       return h('li', { class: e.kind + '-ev' },
         h('span', { class: 'when' }, clock(e.at)),
-        h('span', {}, h('span', { class: 'from' }, e.sender + to), ' ', e.text));
+        h('span', {}, h('span', { class: 'from' }, e.sender + toWho), ' ', e.text));
     };
     const evs = s.events.slice().reverse();
-    const wasOpen = !!document.querySelector('#feed details[open]');
+    $('activity-summary').textContent = 'Activity (' + evs.length + ')';
     $('feed').replaceChildren(...(evs.length ? evs.slice(0, 20).map(evRow) : [h('li', { class: 'empty' }, 'Nothing yet.')]),
-      evs.length > 20 ? h('li', { class: 'more' }, h('details', { open: wasOpen },
-        h('summary', {}, 'Earlier (' + (evs.length - 20) + ')'),
+      evs.length > 20 ? h('li', { class: 'more' }, drawer('feed-earlier', '', 'Earlier (' + (evs.length - 20) + ')',
         h('ul', { class: 'feed' }, evs.slice(20).map(evRow)))) : null);
   }
 
-  function alertErr(e) { $('form-err').textContent = e.message; }
+  function alertErr(e) {
+    const err = $('form-err');
+    if (composeMode === null) $('compose').classList.remove('hidden');
+    err.textContent = e.message;
+  }
 
   // ── Web mode: owner API with a session cookie, live over server-sent events ──
   async function api(path, opts) {
@@ -306,8 +476,13 @@ details[open] summary { margin-bottom: 8px; }
     es.addEventListener('error', () => { $('live').classList.remove('on'); $('live').textContent = 'reconnecting'; });
   }
   function startWeb() {
-    $('owner-forms').classList.remove('hidden');
+    $('btn-goal').classList.remove('hidden');
+    $('btn-msg').classList.remove('hidden');
     $('logout').classList.remove('hidden');
+    $('btn-goal').addEventListener('click', () => setCompose(composeMode === 'goal' ? null : 'goal'));
+    $('btn-msg').addEventListener('click', () => setCompose(composeMode === 'msg' ? null : 'msg'));
+    for (const b of document.querySelectorAll('.cancel-compose')) b.addEventListener('click', () => setCompose(null));
+    $('compose').addEventListener('keydown', (e) => { if (e.key === 'Escape') setCompose(null); });
     $('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       $('login-err').textContent = '';
@@ -321,17 +496,22 @@ details[open] summary { margin-bottom: 8px; }
     $('logout').addEventListener('click', async () => {
       await api('/api/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).catch(() => {});
       if (es) es.close();
+      setCompose(null);
       showLogin();
     });
     $('goal-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const f = e.target;
-      post('/api/goals', { title: f.elements.title.value, detail: f.elements.detail.value }).then(() => f.reset()).catch(alertErr);
+      post('/api/goals', { title: f.elements.title.value, detail: f.elements.detail.value })
+        .then(() => { f.reset(); setCompose(null); })
+        .catch(alertErr);
     });
     $('msg-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const f = e.target;
-      post('/api/messages', { to: f.elements.to.value, text: f.elements.text.value }).then(() => { f.elements.text.value = ''; }).catch(alertErr);
+      post('/api/messages', { to: f.elements.to.value, text: f.elements.text.value })
+        .then(() => { f.elements.text.value = ''; setCompose(null); })
+        .catch(alertErr);
     });
     setInterval(() => state && render(state), 30000); // keep "seen 3m ago" current
     load().then(() => { if (state) listen(); });
