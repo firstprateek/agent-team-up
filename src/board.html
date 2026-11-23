@@ -110,6 +110,7 @@ textarea { resize: vertical; min-height: 64px; }
 
 .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; margin-right: 6px; text-transform: lowercase; }
 .s-open { color: var(--open); } .s-working { color: var(--working); } .s-review { color: var(--review); }
+.s-paused { color: var(--blocked); }
 .s-blocked { color: var(--blocked); } .s-done { color: var(--done); } .s-dropped { color: var(--dropped); }
 li.done .title, li.dropped .title { color: var(--muted); }
 li.dropped .title { text-decoration: line-through; }
@@ -365,6 +366,7 @@ details[open] > summary::before { content: "▾"; }
       h('span', { class: 'id' }, '#' + t.id),
       h('div', { class: 't' },
         h('span', { class: 'pill s-' + t.state }, t.state),
+        t.paused ? h('span', { class: 'pill s-paused', title: 'Paused: ' + t.paused + '. A teammate can claim it to take over.' }, 'paused') : null,
         h('span', { class: 'title' }, t.title),
         t.note ? h('div', {
           class: 'note clickable',

@@ -62,7 +62,7 @@ corrections and preferences. It lives on disk (and in git), not in SQLite; see [
 | --- | --- |
 | `team` | The whole picture in one short reply: me, teammates, open goals, open tasks, unread count. Call it first. |
 | `post_task` | `title`, `brief`, optional `goal`, optional `for` (an agent). |
-| `claim` | Take a task by id, or with no id the best open one: first those meant for me, then unassigned, oldest first. Returns the brief. |
+| `claim` | Take a task by id, or with no id the best open one: first those meant for me, then unassigned, oldest first. Returns the brief. By id it also takes over a paused task (below). |
 | `update` | Change a task I hold: `state`, a `note`, `links` (PRs, branches, files). `handoff` gives it to another agent (for a review, say) and releases it. |
 | `send` | A message to an agent, to `all`, or to `owner`. To `owner` it becomes a question on the board. |
 | `wait` | Blocks until something arrives for me or `seconds` (default 45, max 55) pass. Returns the new events; task notes in them are clipped to 200 characters. |
@@ -77,6 +77,21 @@ Replies are short plain text. Briefs (at most 3000 characters) and notes (1500) 
 branches, PRs) instead of pasting it. `team` is compact: strengths and goal details are clipped, teammates'
 open tasks capped at five, finished tasks left out (yours are always in full). `claim` and `task` return
 text only; a machine client (the runner) passes `structured: true` to also get `structuredContent`.
+
+## Paused tasks and takeover
+
+Agents hit their usage limit without warning, and a task they hold would stay `working` and locked to
+them. So a `working` task is **paused** when its holder is resting (not expired), or the task itself has had
+no update for `--stale-minutes` (default 45). It uses the task's `updated_at`, not the holder's
+`last_seen`: a background `wait` loop keeps `last_seen` fresh after the agent has run out.
+
+`claim` with an explicit id takes over a paused task held by someone else: `claimed_by` changes, the note
+and links stay as the handover, and the old holder and the poster hear "took over #N (paused: reason)".
+`claim` with no id never takes paused tasks, and a working task that is not paused is refused as before.
+The old holder's later `update` is refused ("taken over by X; coordinate with send"), found from the
+takeover event, so there is no extra column. `team` lists paused tasks (five lines at most) and the board
+badges them. Agents are told to checkpoint (push WIP, keep the note as done / next) so a takeover has
+something to start from.
 
 ## Board
 

@@ -282,6 +282,23 @@ describe('MCP', () => {
   });
 });
 
+describe('paused task takeover over MCP', () => {
+  test('claim by id takes over a resting holder; the old holder is refused with a pointer', async () => {
+    const claude = await connect('claude');
+    const codex = await connect('codex');
+    const t = store.postTask('gemini', { title: 'Takeover me', brief: 'b' });
+    store.claim('claude', t.id);
+    await assert.rejects(call(codex, 'claim', { task: t.id }), /working \(claude\)/);
+    store.setStatus('claude', 'resting', Date.now() + 3_600_000, 'quota');
+    assert.match(await call(codex, 'team'), new RegExp(`Paused:[^]*- #${t.id} "Takeover me" — paused \\(claude resting\\)\\. claim ${t.id} to take over`));
+    assert.match(await call(codex, 'claim', { task: t.id }), new RegExp(`You have #${t.id}`));
+    store.setStatus('claude', 'available', null, '');
+    await assert.rejects(call(claude, 'update', { task: t.id, note: 'back' }), /taken over by codex; coordinate with send/);
+    await claude.close();
+    await codex.close();
+  });
+});
+
 describe('size limits', () => {
   test('an oversized /mcp body is refused with 413 and normal calls still work', async () => {
     const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${keys.claude}` };
