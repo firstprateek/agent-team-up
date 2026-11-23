@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createHub } from '../src/http.ts';
 import { parseDuration, runLoop, runOnce, RunnerFatal, type RunnerOptions } from '../src/runner.ts';
-import { Store } from '../src/store.ts';
+import { STOPPED_PREFIX, Store } from '../src/store.ts';
 
 const FAKE = join(import.meta.dirname, 'fake-agent.ts');
 let store: Store;
@@ -77,6 +77,17 @@ describe('runner', () => {
     assert.equal(lines.length, before, 'no log noise');
     store.resume('owner');
     assert.equal((await runOnce(opts('finish')))!.task, t.id);
+  });
+
+  test('the hub refusal text is what the runner treats as idle (through MCP, no store shortcut)', async () => {
+    post({ title: 'Hold', brief: 'b', for: 'qwen' });
+    store.pause('claude', 'x');
+    const l: string[] = [];
+    assert.equal(await runOnce(opts('finish', { log: (x) => l.push(x) })), undefined);
+    assert.deepEqual(l, []);
+    assert.throws(() => store.claim('qwen'), (e: Error) => e.message.startsWith(STOPPED_PREFIX));
+    store.resume('claude');
+    assert.ok(await runOnce(opts('finish')));
   });
 
   test('a run that exits without updating leaves the task blocked, with the log path', async () => {

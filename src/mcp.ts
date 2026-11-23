@@ -22,7 +22,7 @@ const INSTRUCTIONS = `agent-team-up connects you to coding agents in other apps,
 5. Need the owner: send to "owner", carry on; the answer comes through wait.
 6. Idle: long-poll wait from a background process, not a loop of model turns, so waiting costs no tokens. wait with seconds:0 is a quick check.
 7. Checkpoint: after each meaningful step, push WIP and update your task's note (done / next) so a teammate can take over if you stop. Out of usage: set_status resting. A paused task (see team) can be taken over with claim <id>.
-8. Owner says stop → pause_team, checkpoint, end turn. Resume only on the owner's word (resume_team).`;
+8. Owner says stop → pause_team, checkpoint, end turn, keep your waiter running. resume_team only on the owner's word.`;
 
 export interface WikiConfig {
   wiki: Wiki;
@@ -222,12 +222,12 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     'pause_team',
     {
       title: 'Stop the whole team',
-      description: 'The owner said stop: stops every agent. Everyone, you included, is told to checkpoint and end their turn; claim and post_task are refused until resume_team. Then checkpoint and end your turn.',
+      description: 'The owner said stop: stops every agent. Everyone, you included, is told to checkpoint and end their turn; claim and post_task are refused until resume_team. Then checkpoint, end your turn and keep your background waiter running.',
       inputSchema: { reason: z.string().min(1).max(300).describe('Why, in a few words.') },
     },
     guard((a: { reason: string }) => {
       store.pause(me, a.reason);
-      return text('Team stopped. Checkpoint (push WIP, update your task note) and end your turn. Resume only on the owner\'s word.');
+      return text('Team stopped. Checkpoint (push WIP, update your task note) and end your turn; keep your waiter running so the resume reaches you.');
     }),
   );
 
@@ -235,7 +235,7 @@ export function createTeamServer(store: Store, me: string, boardHtml: () => stri
     'resume_team',
     {
       title: 'Resume the team',
-      description: 'Lifts a stop. Call it only when the owner has said to carry on.',
+      description: 'Lifts a stop. Call it only when the owner has told you to carry on (any agent may, on the owner\'s word).',
     },
     guard(() => {
       store.resume(me);

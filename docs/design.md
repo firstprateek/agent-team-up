@@ -100,18 +100,20 @@ One switch stops every agent, whatever app it runs in. State is four `meta` keys
 `paused_reason`, `paused_at`), so there is no schema change. `pause_team {reason}` (any agent) or the
 board's Stop team button (owner API `/api/pause`) sets it and logs one event from `team` to audience `all`.
 Because the sender is the reserved name `team`, the pauser hears it too, and `wait` returns at once:
-"TEAM STOPPED by X: reason. Checkpoint now (commit + push WIP, update your task note with done/next), stop
-your background waiter, and end your turn. Don't start anything new until the owner resumes."
-`resume_team` (or the board's Resume) clears it and tells everyone to call `team` and carry on.
+"TEAM STOPPED by X: reason. Checkpoint now (commit + push WIP, update your task note), stop working, and
+end your turn. Keep your background waiter running so the resume reaches you. Don't call resume_team unless
+the owner told you to." The waiter stays up on purpose: it is how the resume wakes agents. `resume_team`
+(or the board's Resume) clears the stop and sends "Team resumed by X. Call team and carry on." Any agent can
+call `resume_team` (the owner may tell any of them in chat); the event names who did.
 
-While stopped, `claim` and `post_task` are refused with "Team is stopped by X: reason" (the owner can still
+While stopped, `claim` and `post_task` are refused (checked inside the same transaction as the write) with "Team is stopped by X: reason" (the owner can still
 post from the board). `update`, `send`, `task`, `team` and wiki reads keep working so agents can
 checkpoint. `team` opens with a banner line, and the board shows a banner with a Resume button.
 
 Takeover timer: while stopped, `paused()` returns null for every task, so nothing is takeable or badged
-as paused. On resume every `working` task's `updated_at` is refreshed, so the stopped interval never
-counts towards `--stale-minutes` and nothing turns stale the moment the team resumes. (The cost: the real
-last-update time of a working task is lost; the note and links are untouched.) A holder that is resting
+as paused. On resume every `working` task's `updated_at` shifts forward by the stopped interval
+(`MIN(now, updated_at + (now - paused_at))`), so the stopped time never counts towards `--stale-minutes`
+and a task's earlier age is kept. A holder that is resting
 still shows as paused after resume.
 
 ## Board

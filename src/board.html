@@ -305,7 +305,7 @@ details[open] > summary::before { content: "▾"; }
     const stop = s.stopped;
     $('stopbar').classList.toggle('hidden', !stop);
     $('stopbar').replaceChildren(...(stop ? [
-      h('span', { class: 'msg' }, h('strong', {}, 'Team stopped'), ' by ' + stop.by + ' at ' + clock(stop.at) + (stop.reason ? ': ' + stop.reason : '')),
+      h('span', { class: 'msg' }, h('strong', {}, 'Team stopped'), ' by ' + stop.by + ' at ' + clock(stop.at) + (stop.reason ? ': ' + stop.reason : '') + '. Agents checkpoint, end their turn and keep waiting for the resume.'),
       inApp ? null : h('button', { type: 'button', class: 'primary', onclick: () => post('/api/resume', {}).catch(alertErr) }, 'Resume'),
     ].filter(Boolean) : []));
     $('btn-stop').textContent = stop ? 'Stopped' : 'Stop team';

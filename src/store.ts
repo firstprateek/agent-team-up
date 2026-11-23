@@ -73,6 +73,9 @@ export interface Question {
 
 export class TeamError extends Error {}
 
+/** Prefix of the refusal while the team is stopped; the runner matches on it. */
+export const STOPPED_PREFIX = 'Team is stopped';
+
 /** The team-wide stop switch (see `pause`). */
 export interface PauseState {
   by: string;
@@ -408,7 +411,7 @@ export class Store {
 
   private requireRunning(): void {
     const p = this.pauseState();
-    if (p) throw new TeamError(`Team is stopped by ${p.by}${p.reason ? `: ${p.reason}` : ''}. Don't start anything new until the owner resumes.`);
+    if (p) throw new TeamError(`${STOPPED_PREFIX} by ${p.by}${p.reason ? `: ${p.reason}` : ''}. Don't start anything new until the owner resumes.`);
   }
 
   openQuestions(): Question[] {
@@ -469,7 +472,6 @@ export class Store {
     const brief = p.brief.trim();
     if (!title) throw new TeamError('A task needs a title.');
     if (!brief) throw new TeamError('A task needs a brief that someone else could start from.');
-    if (by !== 'owner') this.requireRunning();
     if (p.goal != null) {
       const g = this.goal(p.goal);
       if (!g) throw new TeamError(`There is no goal G${p.goal}.`);
@@ -478,6 +480,7 @@ export class Store {
     const forAgent = p.for?.trim() || null;
     if (forAgent) this.requireAgent(forAgent);
     const id = this.tx(() => {
+      if (by !== 'owner') this.requireRunning();
       const now = this.now();
       const r = this.db
         .prepare('INSERT INTO tasks (goal_id, title, brief, for_agent, posted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -504,8 +507,8 @@ export class Store {
 
   /** Claims task `id`, or the best open task for `agent`. Returns undefined when there is nothing to take. */
   claim(agent: string, id?: number, opts: { mineOnly?: boolean } = {}): Task | undefined {
-    this.requireRunning();
     const out = this.tx(() => {
+      this.requireRunning();
       this.back(agent);
       let t: Task | undefined;
       if (id !== undefined) {
@@ -672,7 +675,7 @@ export class Store {
         kind: 'pause',
         task_id: null,
         goal_id: null,
-        text: `TEAM STOPPED by ${by}: ${why}. Checkpoint now (commit + push WIP, update your task note with done/next), stop your background waiter, and end your turn. Don't start anything new until the owner resumes.`,
+        text: `TEAM STOPPED by ${by}: ${why}. Checkpoint now (commit + push WIP, update your task note), stop working, and end your turn. Keep your background waiter running so the resume reaches you. Don't call resume_team unless the owner told you to.`,
       });
       return { by, reason: why, at };
     });
@@ -681,15 +684,17 @@ export class Store {
   }
 
   /**
-   * Lifts the stop. Working tasks get a fresh update time, so the stopped interval doesn't count towards
-   * the takeover timer (stale-minutes) and nothing turns "paused" the moment the team resumes.
+   * Lifts the stop. Working tasks' update times shift forward by the stopped interval, so it doesn't count
+   * towards the takeover timer (stale-minutes) but a task's age before the stop is kept.
    */
   resume(by: string): void {
     this.tx(() => {
-      if (!this.pauseState()) throw new TeamError("The team isn't stopped.");
+      const cur = this.pauseState();
+      if (!cur) throw new TeamError("The team isn't stopped.");
       this.db.prepare("DELETE FROM meta WHERE key LIKE 'paused%'").run();
-      this.db.prepare("UPDATE tasks SET updated_at = ? WHERE state = 'working'").run(this.now());
-      this.log({ sender: 'team', audience: 'all', kind: 'resume', task_id: null, goal_id: null, text: `Team resumed by ${by}. Call team and carry on with your tasks.` });
+      const now = this.now();
+      this.db.prepare("UPDATE tasks SET updated_at = MIN(?, updated_at + ?) WHERE state = 'working'").run(now, Math.max(0, now - cur.at));
+      this.log({ sender: 'team', audience: 'all', kind: 'resume', task_id: null, goal_id: null, text: `Team resumed by ${by}. Call team and carry on.` });
     });
     this.changed();
   }
